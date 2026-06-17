@@ -264,6 +264,65 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="search_tickets",
+            description=(
+                "Search Zendesk tickets via the Search API. Accepts raw Zendesk Search syntax "
+                "(e.g. 'assignee:123 status<solved tags:vpn created>2026-01-01'); 'type:ticket' "
+                "is auto-prepended when no 'type:' prefix is present. Supports an optional "
+                "extra_filters dict to merge structured filters onto the query. "
+                "Hard 1000-result cap (page * per_page <= 1000) — narrow by tag, date, or brand "
+                "for analytical work. Newly-created tickets take a few minutes to appear in the "
+                "search index. Returns a lean 'summary' projection by default, or 'full' to include "
+                "description + custom_fields + brand/form/group IDs. "
+                "ZQL syntax reference: https://support.zendesk.com/hc/en-us/articles/4408886879258"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Raw Zendesk Search syntax. 'type:ticket' auto-prepended if no 'type:' prefix is present."
+                    },
+                    "extra_filters": {
+                        "type": "object",
+                        "description": "Optional structured filters merged onto the query as 'key:value' pairs. Keys may carry operator suffixes (e.g. 'status<', 'created>'). List values are expanded to multiple key:value pairs."
+                    },
+                    "fields": {
+                        "type": "string",
+                        "enum": ["summary", "full"],
+                        "description": "Projection: 'summary' (lean, no description) or 'full' (adds description, ticket_form_id, brand_id, group_id, organization_id, custom_fields).",
+                        "default": "summary"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "1-based page number.",
+                        "default": 1
+                    },
+                    "per_page": {
+                        "type": "integer",
+                        "description": "Results per page (1-100). page * per_page must be <= 1000.",
+                        "default": 25
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "updated_at, created_at, priority, status, ticket_type.",
+                        "default": "updated_at"
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "default": "desc"
+                    },
+                    "include_sideloads": {
+                        "type": "boolean",
+                        "description": "When true, request ?include=users,organizations,groups so the response includes referenced entities. Saves follow-up lookups.",
+                        "default": False
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        types.Tool(
             name="update_ticket",
             description="Update fields on an existing Zendesk ticket (e.g., status, priority, assignee_id)",
             inputSchema={
@@ -389,6 +448,24 @@ async def handle_call_tool(
             result = zendesk_client.search_users(
                 query=arguments["query"],
                 limit=arguments.get("limit", 10),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "search_tickets":
+            if not arguments or "query" not in arguments:
+                raise ValueError("query is required")
+            result = zendesk_client.search_tickets(
+                query=arguments.get("query", ""),
+                extra_filters=arguments.get("extra_filters"),
+                fields=arguments.get("fields", "summary"),
+                page=arguments.get("page", 1),
+                per_page=arguments.get("per_page", 25),
+                sort_by=arguments.get("sort_by", "updated_at"),
+                sort_order=arguments.get("sort_order", "desc"),
+                include_sideloads=arguments.get("include_sideloads", False),
             )
             return [types.TextContent(
                 type="text",

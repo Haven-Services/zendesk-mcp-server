@@ -287,6 +287,141 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to search users: {str(e)}")
 
+    _TICKET_SUMMARY_FIELDS = (
+        'id', 'subject', 'status', 'priority', 'type',
+        'created_at', 'updated_at',
+        'requester_id', 'assignee_id', 'tags',
+    )
+    _TICKET_FULL_EXTRA_FIELDS = (
+        'description', 'ticket_form_id', 'brand_id', 'group_id',
+        'organization_id', 'custom_fields',
+    )
+
+    def search_tickets(
+        self,
+        query: str,
+        extra_filters: Dict[str, Any] | None = None,
+        fields: str = 'summary',
+        page: int = 1,
+        per_page: int = 25,
+        sort_by: str = 'updated_at',
+        sort_order: str = 'desc',
+        include_sideloads: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Search tickets via /api/v2/search.json.
+
+        Composes a Zendesk Search query from raw `query` plus optional structured
+        `extra_filters` (merged as `key:value` pairs). `type:ticket` is auto-prepended
+        when no `type:` prefix is present in the input.
+
+        Hard 1000-result cap enforced server-side: page * per_page > 1000 raises
+        before any API call. Newly-created tickets take a few minutes to appear
+        in the search index.
+
+        Args:
+            query: Raw Zendesk Search syntax (e.g. "assignee:123 status<solved").
+            extra_filters: Optional dict merged onto `query` as `key:value`. Keys
+                may carry operator suffixes (e.g. "status<": "solved", "created>": "2026-01-01").
+            fields: "summary" (lean) or "full" (adds description + categorization fields).
+            page: 1-based. Clamped to >= 1.
+            per_page: 1..100. Clamped.
+            sort_by: updated_at, created_at, priority, status, ticket_type.
+            sort_order: asc | desc.
+            include_sideloads: when True, request ?include=users,organizations,groups.
+        """
+        try:
+            page = max(1, int(page or 1))
+            per_page = max(1, min(int(per_page or 25), 100))
+
+            if page * per_page > 1000:
+                raise ValueError(
+                    f"Search API cap reached: page * per_page = {page * per_page} > 1000. "
+                    "Narrow the query with tags, date range, or brand_id."
+                )
+
+            extras = []
+            for k, v in (extra_filters or {}).items():
+                if v is None:
+                    continue
+                if isinstance(v, (list, tuple)):
+                    for item in v:
+                        extras.append(f"{k}:{item}")
+                else:
+                    extras.append(f"{k}:{v}")
+
+            composed = ' '.join(part for part in [query.strip() if query else '', *extras] if part)
+            if 'type:' not in composed:
+                composed = f"type:ticket {composed}".strip()
+
+            params = {
+                'query': composed,
+                'page': str(page),
+                'per_page': str(per_page),
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+            }
+            if include_sideloads:
+                params['include'] = 'users,organizations,groups'
+
+            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            summary_keys = self._TICKET_SUMMARY_FIELDS
+            full_keys = summary_keys + self._TICKET_FULL_EXTRA_FIELDS
+            keys = full_keys if fields == 'full' else summary_keys
+
+            tickets = []
+            for t in data.get('results', []):
+                row = {k: t.get(k) for k in keys}
+                row['via_channel'] = (t.get('via') or {}).get('channel')
+                tickets.append(row)
+
+            total = data.get('count', 0)
+            result: Dict[str, Any] = {
+                'query': query,
+                'effective_query': composed,
+                'page': page,
+                'per_page': per_page,
+                'count': len(tickets),
+                'total': total,
+                'has_more': data.get('next_page') is not None,
+                'tickets': tickets,
+            }
+            if total > 1000:
+                result['truncation_warning'] = (
+                    f"total ({total}) exceeds the 1000-result Search API cap; "
+                    "results past page 10 (per_page=100) are unreachable. Narrow the query."
+                )
+
+            if include_sideloads:
+                result['users'] = [
+                    {k: u.get(k) for k in ('id', 'name', 'email', 'role')}
+                    for u in data.get('users', []) or []
+                ]
+                result['organizations'] = [
+                    {k: o.get(k) for k in ('id', 'name')}
+                    for o in data.get('organizations', []) or []
+                ]
+                result['groups'] = [
+                    {k: g.get(k) for k in ('id', 'name')}
+                    for g in data.get('groups', []) or []
+                ]
+
+            return result
+        except ValueError:
+            raise
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search tickets: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search tickets: {str(e)}")
+
     def get_all_articles(self) -> Dict[str, Any]:
         """
         Fetch help center articles as knowledge base.
