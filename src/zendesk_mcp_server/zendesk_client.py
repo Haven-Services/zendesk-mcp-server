@@ -26,8 +26,6 @@ _TICKET_FULL_FIELDS: Tuple[str, ...] = _TICKET_SUMMARY_FIELDS + (
 _USER_FIELDS: Tuple[str, ...] = (
     'id', 'name', 'email', 'role', 'active', 'organization_id', 'created_at',
 )
-_ORGANIZATION_FIELDS: Tuple[str, ...] = ('id', 'name')
-_GROUP_FIELDS: Tuple[str, ...] = ('id', 'name')
 
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
@@ -394,7 +392,6 @@ class ZendeskClient:
         per_page: int = 25,
         sort_by: str = 'updated_at',
         sort_order: str = 'desc',
-        include_sideloads: bool = False,
     ) -> Dict[str, Any]:
         """
         Search tickets via /api/v2/search.json.
@@ -423,7 +420,12 @@ class ZendeskClient:
             per_page: 1..100. Out-of-range clamps.
             sort_by: updated_at, created_at, priority, status, ticket_type.
             sort_order: asc | desc.
-            include_sideloads: when True, request ?include=users,organizations,groups.
+
+        Note: sideload support (`?include=users,organizations,groups`) was
+        tried and dropped — Zendesk's /search.json returns empty sideload
+        arrays even when result rows reference users/orgs/groups. To resolve
+        IDs to names, call `search_users` (or future metadata-listing tools)
+        separately.
         """
         page, per_page = _coerce_pagination(page, per_page)
         if page * per_page > _SEARCH_RESULT_CAP:
@@ -445,8 +447,6 @@ class ZendeskClient:
             'sort_by': sort_by,
             'sort_order': sort_order,
         }
-        if include_sideloads:
-            params['include'] = 'users,organizations,groups'
 
         data = self._get_json('search.json', params, error_context='search tickets')
 
@@ -478,11 +478,6 @@ class ZendeskClient:
                 f"total ({total}) exceeds the {_SEARCH_RESULT_CAP}-result Search API cap; "
                 "results past page 10 (per_page=100) are unreachable. Narrow the query."
             )
-
-        if include_sideloads:
-            result['users'] = [_project(u, _USER_FIELDS) for u in data.get('users') or []]
-            result['organizations'] = [_project(o, _ORGANIZATION_FIELDS) for o in data.get('organizations') or []]
-            result['groups'] = [_project(g, _GROUP_FIELDS) for g in data.get('groups') or []]
 
         return result
 

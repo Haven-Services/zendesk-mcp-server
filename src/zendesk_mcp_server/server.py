@@ -312,11 +312,6 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "enum": ["asc", "desc"],
                         "default": "desc"
-                    },
-                    "include_sideloads": {
-                        "type": "boolean",
-                        "description": "When true, request ?include=users,organizations,groups so the response includes referenced entities. Saves follow-up lookups.",
-                        "default": False
                     }
                 },
                 "required": ["query"]
@@ -461,7 +456,7 @@ async def handle_call_tool(
             # forward kwargs the caller actually supplied.
             optional_keys = (
                 "extra_filters", "fields", "page", "per_page",
-                "sort_by", "sort_order", "include_sideloads",
+                "sort_by", "sort_order",
             )
             result = zendesk_client.search_tickets(
                 query=arguments["query"],
