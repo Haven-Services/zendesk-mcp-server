@@ -305,7 +305,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "sort_by": {
                         "type": "string",
-                        "description": "updated_at, created_at, priority, status, ticket_type.",
+                        "enum": ["updated_at", "created_at", "priority", "status", "ticket_type"],
                         "default": "updated_at"
                     },
                     "sort_order": {
@@ -457,15 +457,15 @@ async def handle_call_tool(
         elif name == "search_tickets":
             if not arguments or "query" not in arguments:
                 raise ValueError("query is required")
+            # Defaults live on the Python signature in zendesk_client.py — only
+            # forward kwargs the caller actually supplied.
+            optional_keys = (
+                "extra_filters", "fields", "page", "per_page",
+                "sort_by", "sort_order", "include_sideloads",
+            )
             result = zendesk_client.search_tickets(
-                query=arguments.get("query", ""),
-                extra_filters=arguments.get("extra_filters"),
-                fields=arguments.get("fields", "summary"),
-                page=arguments.get("page", 1),
-                per_page=arguments.get("per_page", 25),
-                sort_by=arguments.get("sort_by", "updated_at"),
-                sort_order=arguments.get("sort_order", "desc"),
-                include_sideloads=arguments.get("include_sideloads", False),
+                query=arguments["query"],
+                **{k: arguments[k] for k in optional_keys if k in arguments},
             )
             return [types.TextContent(
                 type="text",

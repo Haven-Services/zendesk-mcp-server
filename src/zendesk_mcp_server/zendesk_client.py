@@ -1,13 +1,124 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import json
+import re
 import urllib.request
 import urllib.parse
+import urllib.error
 import base64
 import requests as _requests
 
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
+
+
+# Field projections — single source of truth so the same record type returns the
+# same keys whether it's surfaced as a primary result or as a sideload.
+_TICKET_SUMMARY_FIELDS: Tuple[str, ...] = (
+    'id', 'subject', 'status', 'priority', 'type',
+    'created_at', 'updated_at',
+    'requester_id', 'assignee_id', 'tags',
+)
+_TICKET_FULL_FIELDS: Tuple[str, ...] = _TICKET_SUMMARY_FIELDS + (
+    'description', 'ticket_form_id', 'brand_id', 'group_id',
+    'organization_id', 'custom_fields',
+)
+_USER_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'email', 'role', 'active', 'organization_id', 'created_at',
+)
+_ORGANIZATION_FIELDS: Tuple[str, ...] = ('id', 'name')
+_GROUP_FIELDS: Tuple[str, ...] = ('id', 'name')
+
+# Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
+_SEARCH_RESULT_CAP = 1000
+
+
+def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
+    return {k: record.get(k) for k in fields}
+
+
+def _zql_format_value(v: Any) -> str:
+    """Format a Python value as a ZQL operand. Bools → ZQL lowercase. Values with
+    whitespace or embedded quotes get double-quoted (and embedded quotes escaped)."""
+    if isinstance(v, bool):
+        return 'true' if v else 'false'
+    s = str(v)
+    if any(c in s for c in ' \t"'):
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    return s
+
+
+def _zql_separator(key: str) -> str:
+    """Return the separator between a ZQL field name and its operand. Keys carrying
+    a comparison-operator suffix (status<, created>, updated<=, due>=) take no
+    extra ':' — the operator already separates field from value."""
+    if key.endswith(('<=', '>=')):
+        return ''
+    if key and key[-1] in '<>':
+        return ''
+    return ':'
+
+
+def _compose_zql(
+    query: Any,
+    extra_filters: Dict[str, Any] | None,
+    object_type: str | None,
+) -> str:
+    """Compose a Zendesk Search query from raw `query` + structured `extra_filters`.
+
+    Adds `type:<object_type>` only when the composed query has no top-level `type:`
+    filter (word-boundary check — substrings like `prototype:` don't count).
+    Empty-string and None values are skipped.
+    """
+    if query is None:
+        raw = ''
+    elif isinstance(query, str):
+        raw = query.strip()
+    else:
+        raise TypeError(f"query must be a string, got {type(query).__name__}")
+
+    parts: List[str] = []
+    if raw:
+        parts.append(raw)
+
+    for k, v in (extra_filters or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)):
+            if not v:
+                continue
+            sep = _zql_separator(k)
+            for item in v:
+                if item is None or (isinstance(item, str) and not item):
+                    continue
+                parts.append(f"{k}{sep}{_zql_format_value(item)}")
+        else:
+            if isinstance(v, str) and not v:
+                continue
+            sep = _zql_separator(k)
+            parts.append(f"{k}{sep}{_zql_format_value(v)}")
+
+    composed = ' '.join(parts)
+    if object_type and not re.search(r'(^|\s)type:', composed):
+        composed = f"type:{object_type} {composed}".strip()
+    return composed
+
+
+def _coerce_pagination(
+    page: Any,
+    per_page: Any,
+    *,
+    default_per_page: int = 25,
+    max_per_page: int = 100,
+) -> Tuple[int, int]:
+    """Coerce page/per_page to clamped ints. Rejects bool (which would otherwise
+    pass `isinstance(x, int)` since bool is a subclass). page < 1 → 1; per_page
+    above max → max; per_page < 1 → 1."""
+    if isinstance(page, bool) or isinstance(per_page, bool):
+        raise TypeError("page and per_page must be integers, not bool")
+    page_int = 1 if page is None else int(page)
+    per_page_int = default_per_page if per_page is None else int(per_page)
+    return max(1, page_int), max(1, min(per_page_int, max_per_page))
 
 
 class ZendeskClient:
@@ -30,6 +141,36 @@ class ZendeskClient:
         credentials = f"{email}/token:{token}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
+
+    # --- shared HTTP path -----------------------------------------------------
+
+    def _get_json(
+        self,
+        path: str,
+        params: Dict[str, str],
+        *,
+        error_context: str,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        """Authenticated GET against the Zendesk REST API. Returns decoded JSON.
+
+        HTTP errors are re-raised as `Exception` carrying the response body — the
+        body is where Zendesk explains the failure (e.g. 422 with reasons). All
+        other exceptions (URLError, JSONDecodeError, etc.) propagate with their
+        original type so the traceback survives for debugging.
+        """
+        url = f"{self.base_url}/{path.lstrip('/')}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url)
+        req.add_header('Authorization', self.auth_header)
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8', errors='replace') if e.fp else "No response body"
+            raise Exception(f"Failed to {error_context}: HTTP {e.code} - {e.reason}. {error_body}")
+
+    # --- Zenpy-backed methods (unchanged shape) -------------------------------
 
     def get_ticket(self, ticket_id: int) -> Dict[str, Any]:
         """
@@ -173,75 +314,59 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to post comment on ticket {ticket_id}: {str(e)}")
 
-    def get_tickets(self, page: int = 1, per_page: int = 25, sort_by: str = 'created_at', sort_order: str = 'desc') -> Dict[str, Any]:
+    # --- list/search via direct REST ------------------------------------------
+
+    def get_tickets(
+        self,
+        page: int = 1,
+        per_page: int = 25,
+        sort_by: str = 'created_at',
+        sort_order: str = 'desc',
+    ) -> Dict[str, Any]:
         """
-        Get the latest tickets with proper pagination support using direct API calls.
+        Get the latest tickets with offset pagination via /tickets.json.
 
         Args:
-            page: Page number (1-based)
-            per_page: Number of tickets per page (max 100)
-            sort_by: Field to sort by (created_at, updated_at, priority, status)
-            sort_order: Sort order (asc or desc)
-
-        Returns:
-            Dict containing tickets and pagination info
+            page: Page number (1-based; <1 clamped).
+            per_page: Results per page (1-100; out-of-range clamped).
+            sort_by: created_at, updated_at, priority, status.
+            sort_order: asc or desc.
         """
-        try:
-            # Cap at reasonable limit
-            per_page = min(per_page, 100)
+        page, per_page = _coerce_pagination(page, per_page)
+        params = {
+            'page': str(page),
+            'per_page': str(per_page),
+            'sort_by': sort_by,
+            'sort_order': sort_order,
+        }
+        data = self._get_json('tickets.json', params, error_context='get latest tickets')
 
-            # Build URL with parameters for offset pagination
-            params = {
-                'page': str(page),
-                'per_page': str(per_page),
-                'sort_by': sort_by,
-                'sort_order': sort_order
+        ticket_list = [
+            {
+                'id': t.get('id'),
+                'subject': t.get('subject'),
+                'status': t.get('status'),
+                'priority': t.get('priority'),
+                'description': t.get('description'),
+                'created_at': t.get('created_at'),
+                'updated_at': t.get('updated_at'),
+                'requester_id': t.get('requester_id'),
+                'assignee_id': t.get('assignee_id'),
             }
-            query_string = urllib.parse.urlencode(params)
-            url = f"{self.base_url}/tickets.json?{query_string}"
+            for t in data.get('tickets', [])
+        ]
 
-            # Create request with auth header
-            req = urllib.request.Request(url)
-            req.add_header('Authorization', self.auth_header)
-            req.add_header('Content-Type', 'application/json')
-
-            # Make the API request
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
-
-            tickets_data = data.get('tickets', [])
-
-            # Process tickets to return only essential fields
-            ticket_list = []
-            for ticket in tickets_data:
-                ticket_list.append({
-                    'id': ticket.get('id'),
-                    'subject': ticket.get('subject'),
-                    'status': ticket.get('status'),
-                    'priority': ticket.get('priority'),
-                    'description': ticket.get('description'),
-                    'created_at': ticket.get('created_at'),
-                    'updated_at': ticket.get('updated_at'),
-                    'requester_id': ticket.get('requester_id'),
-                    'assignee_id': ticket.get('assignee_id')
-                })
-
-            return {
-                'tickets': ticket_list,
-                'page': page,
-                'per_page': per_page,
-                'count': len(ticket_list),
-                'sort_by': sort_by,
-                'sort_order': sort_order,
-                'has_more': data.get('next_page') is not None,
-                'next_page': page + 1 if data.get('next_page') else None,
-                'previous_page': page - 1 if data.get('previous_page') and page > 1 else None
-            }
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode() if e.fp else "No response body"
-            raise Exception(f"Failed to get latest tickets: HTTP {e.code} - {e.reason}. {error_body}")
-        except Exception as e:
-            raise Exception(f"Failed to get latest tickets: {str(e)}")
+        return {
+            'tickets': ticket_list,
+            'page': page,
+            'per_page': per_page,
+            'count': len(ticket_list),
+            'sort_by': sort_by,
+            'sort_order': sort_order,
+            'has_more': data.get('next_page') is not None,
+            'next_page': page + 1 if data.get('next_page') else None,
+            'previous_page': page - 1 if data.get('previous_page') and page > 1 else None,
+        }
 
     def search_users(self, query: str, limit: int = 10) -> Dict[str, Any]:
         """
@@ -250,52 +375,15 @@ class ZendeskClient:
 
         Args:
             query: Search text (email, name fragment, phone number).
-            limit: Max users to return (1..100). Zendesk pages at 100; we trim client-side.
+            limit: Max users to return (1..100).
         """
-        try:
-            limit = max(1, min(int(limit or 10), 100))
-            params = {'query': query, 'per_page': str(limit)}
-            url = f"{self.base_url}/users/search.json?{urllib.parse.urlencode(params)}"
-
-            req = urllib.request.Request(url)
-            req.add_header('Authorization', self.auth_header)
-            req.add_header('Content-Type', 'application/json')
-
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
-
-            users = []
-            for u in data.get('users', [])[:limit]:
-                users.append({
-                    'id': u.get('id'),
-                    'name': u.get('name'),
-                    'email': u.get('email'),
-                    'role': u.get('role'),
-                    'active': u.get('active'),
-                    'organization_id': u.get('organization_id'),
-                    'created_at': u.get('created_at'),
-                })
-
-            return {
-                'query': query,
-                'count': len(users),
-                'users': users,
-            }
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode() if e.fp else "No response body"
-            raise Exception(f"Failed to search users: HTTP {e.code} - {e.reason}. {error_body}")
-        except Exception as e:
-            raise Exception(f"Failed to search users: {str(e)}")
-
-    _TICKET_SUMMARY_FIELDS = (
-        'id', 'subject', 'status', 'priority', 'type',
-        'created_at', 'updated_at',
-        'requester_id', 'assignee_id', 'tags',
-    )
-    _TICKET_FULL_EXTRA_FIELDS = (
-        'description', 'ticket_form_id', 'brand_id', 'group_id',
-        'organization_id', 'custom_fields',
-    )
+        if not query:
+            raise ValueError("query is required")
+        _, limit = _coerce_pagination(1, limit, default_per_page=10)
+        params = {'query': query, 'per_page': str(limit)}
+        data = self._get_json('users/search.json', params, error_context='search users')
+        users = [_project(u, _USER_FIELDS) for u in data.get('users', [])[:limit]]
+        return {'query': query, 'count': len(users), 'users': users}
 
     def search_tickets(
         self,
@@ -312,115 +400,91 @@ class ZendeskClient:
         Search tickets via /api/v2/search.json.
 
         Composes a Zendesk Search query from raw `query` plus optional structured
-        `extra_filters` (merged as `key:value` pairs). `type:ticket` is auto-prepended
-        when no `type:` prefix is present in the input.
+        `extra_filters`. Keys with operator suffixes (`status<`, `created>`,
+        `updated<=`, `due>=`) emit ZQL without an extra `:`. String values
+        containing whitespace are double-quoted. Booleans render as lowercase
+        `true`/`false`. None and empty-string values are skipped. `type:ticket`
+        is auto-prepended when no top-level `type:` filter is present in the
+        composed query.
 
         Hard 1000-result cap enforced server-side: page * per_page > 1000 raises
-        before any API call. Newly-created tickets take a few minutes to appear
-        in the search index.
+        before any API call. The `truncated` flag in the response is True when
+        the total exceeds the cap so callers can detect when results are
+        unreachable rather than missing. Newly-created tickets take a few
+        minutes to appear in the search index.
 
         Args:
             query: Raw Zendesk Search syntax (e.g. "assignee:123 status<solved").
-            extra_filters: Optional dict merged onto `query` as `key:value`. Keys
-                may carry operator suffixes (e.g. "status<": "solved", "created>": "2026-01-01").
-            fields: "summary" (lean) or "full" (adds description + categorization fields).
-            page: 1-based. Clamped to >= 1.
-            per_page: 1..100. Clamped.
+            extra_filters: Structured filters merged onto `query`. Keys may
+                carry operator suffixes (e.g. "status<": "solved").
+            fields: "summary" (lean) or "full" (adds description + categorization
+                fields). Matched case-insensitively.
+            page: 1-based. <1 clamps to 1.
+            per_page: 1..100. Out-of-range clamps.
             sort_by: updated_at, created_at, priority, status, ticket_type.
             sort_order: asc | desc.
             include_sideloads: when True, request ?include=users,organizations,groups.
         """
-        try:
-            page = max(1, int(page or 1))
-            per_page = max(1, min(int(per_page or 25), 100))
+        page, per_page = _coerce_pagination(page, per_page)
+        if page * per_page > _SEARCH_RESULT_CAP:
+            raise ValueError(
+                f"Search API cap reached: page * per_page = {page * per_page} > {_SEARCH_RESULT_CAP}. "
+                "Narrow the query with tags, date range, or brand_id."
+            )
 
-            if page * per_page > 1000:
-                raise ValueError(
-                    f"Search API cap reached: page * per_page = {page * per_page} > 1000. "
-                    "Narrow the query with tags, date range, or brand_id."
-                )
+        normalized_fields = (fields or 'summary').strip().lower()
+        if normalized_fields not in ('summary', 'full'):
+            raise ValueError(f"fields must be 'summary' or 'full', got {fields!r}")
 
-            extras = []
-            for k, v in (extra_filters or {}).items():
-                if v is None:
-                    continue
-                if isinstance(v, (list, tuple)):
-                    for item in v:
-                        extras.append(f"{k}:{item}")
-                else:
-                    extras.append(f"{k}:{v}")
+        composed = _compose_zql(query, extra_filters, object_type='ticket')
 
-            composed = ' '.join(part for part in [query.strip() if query else '', *extras] if part)
-            if 'type:' not in composed:
-                composed = f"type:ticket {composed}".strip()
+        params = {
+            'query': composed,
+            'page': str(page),
+            'per_page': str(per_page),
+            'sort_by': sort_by,
+            'sort_order': sort_order,
+        }
+        if include_sideloads:
+            params['include'] = 'users,organizations,groups'
 
-            params = {
-                'query': composed,
-                'page': str(page),
-                'per_page': str(per_page),
-                'sort_by': sort_by,
-                'sort_order': sort_order,
-            }
-            if include_sideloads:
-                params['include'] = 'users,organizations,groups'
+        data = self._get_json('search.json', params, error_context='search tickets')
 
-            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
-            req = urllib.request.Request(url)
-            req.add_header('Authorization', self.auth_header)
-            req.add_header('Content-Type', 'application/json')
+        keys = _TICKET_FULL_FIELDS if normalized_fields == 'full' else _TICKET_SUMMARY_FIELDS
+        tickets = []
+        for t in data.get('results', []):
+            row = _project(t, keys)
+            row['via_channel'] = (t.get('via') or {}).get('channel')
+            tickets.append(row)
 
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+        total = data.get('count', 0)
+        result: Dict[str, Any] = {
+            'query': query,
+            'effective_query': composed,
+            'page': page,
+            'per_page': per_page,
+            'count': len(tickets),
+            'total': total,
+            # has_more = "the API can serve another page". truncated = "there are
+            # results past the 1000-row Search API cap that no caller can reach".
+            # Branch on `truncated` for "did I miss results?"; branch on `has_more`
+            # for "should I fetch page N+1?".
+            'has_more': data.get('next_page') is not None,
+            'truncated': total > _SEARCH_RESULT_CAP,
+            'tickets': tickets,
+        }
+        if total > _SEARCH_RESULT_CAP:
+            result['truncation_warning'] = (
+                f"total ({total}) exceeds the {_SEARCH_RESULT_CAP}-result Search API cap; "
+                "results past page 10 (per_page=100) are unreachable. Narrow the query."
+            )
 
-            summary_keys = self._TICKET_SUMMARY_FIELDS
-            full_keys = summary_keys + self._TICKET_FULL_EXTRA_FIELDS
-            keys = full_keys if fields == 'full' else summary_keys
+        if include_sideloads:
+            result['users'] = [_project(u, _USER_FIELDS) for u in data.get('users') or []]
+            result['organizations'] = [_project(o, _ORGANIZATION_FIELDS) for o in data.get('organizations') or []]
+            result['groups'] = [_project(g, _GROUP_FIELDS) for g in data.get('groups') or []]
 
-            tickets = []
-            for t in data.get('results', []):
-                row = {k: t.get(k) for k in keys}
-                row['via_channel'] = (t.get('via') or {}).get('channel')
-                tickets.append(row)
-
-            total = data.get('count', 0)
-            result: Dict[str, Any] = {
-                'query': query,
-                'effective_query': composed,
-                'page': page,
-                'per_page': per_page,
-                'count': len(tickets),
-                'total': total,
-                'has_more': data.get('next_page') is not None,
-                'tickets': tickets,
-            }
-            if total > 1000:
-                result['truncation_warning'] = (
-                    f"total ({total}) exceeds the 1000-result Search API cap; "
-                    "results past page 10 (per_page=100) are unreachable. Narrow the query."
-                )
-
-            if include_sideloads:
-                result['users'] = [
-                    {k: u.get(k) for k in ('id', 'name', 'email', 'role')}
-                    for u in data.get('users', []) or []
-                ]
-                result['organizations'] = [
-                    {k: o.get(k) for k in ('id', 'name')}
-                    for o in data.get('organizations', []) or []
-                ]
-                result['groups'] = [
-                    {k: g.get(k) for k in ('id', 'name')}
-                    for g in data.get('groups', []) or []
-                ]
-
-            return result
-        except ValueError:
-            raise
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode() if e.fp else "No response body"
-            raise Exception(f"Failed to search tickets: HTTP {e.code} - {e.reason}. {error_body}")
-        except Exception as e:
-            raise Exception(f"Failed to search tickets: {str(e)}")
+        return result
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
