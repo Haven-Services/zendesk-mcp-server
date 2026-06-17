@@ -243,6 +243,50 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to get latest tickets: {str(e)}")
 
+    def search_users(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """
+        Search users via /api/v2/users/search.json. Zendesk decides what to match
+        on (email, name, phone); secondary emails are included in the search.
+
+        Args:
+            query: Search text (email, name fragment, phone number).
+            limit: Max users to return (1..100). Zendesk pages at 100; we trim client-side.
+        """
+        try:
+            limit = max(1, min(int(limit or 10), 100))
+            params = {'query': query, 'per_page': str(limit)}
+            url = f"{self.base_url}/users/search.json?{urllib.parse.urlencode(params)}"
+
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            users = []
+            for u in data.get('users', [])[:limit]:
+                users.append({
+                    'id': u.get('id'),
+                    'name': u.get('name'),
+                    'email': u.get('email'),
+                    'role': u.get('role'),
+                    'active': u.get('active'),
+                    'organization_id': u.get('organization_id'),
+                    'created_at': u.get('created_at'),
+                })
+
+            return {
+                'query': query,
+                'count': len(users),
+                'users': users,
+            }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search users: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search users: {str(e)}")
+
     def get_all_articles(self) -> Dict[str, Any]:
         """
         Fetch help center articles as knowledge base.

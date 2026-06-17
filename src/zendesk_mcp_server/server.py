@@ -245,6 +245,25 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="search_users",
+            description="Search Zendesk users by email, name, or phone. Matches across primary and secondary emails. Returns id, name, email, role, active, organization_id, created_at per user.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search text (email address, name fragment, or phone number)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max users to return (1-100)",
+                        "default": 10
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        types.Tool(
             name="update_ticket",
             description="Update fields on an existing Zendesk ticket (e.g., status, priority, assignee_id)",
             inputSchema={
@@ -363,6 +382,18 @@ async def handle_call_tool(
                     type="text",
                     text=json.dumps({"content_type": content_type, "data_base64": result["data"]})
                 )]
+
+        elif name == "search_users":
+            if not arguments or not arguments.get("query"):
+                raise ValueError("query is required")
+            result = zendesk_client.search_users(
+                query=arguments["query"],
+                limit=arguments.get("limit", 10),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
 
         elif name == "update_ticket":
             if not arguments:
