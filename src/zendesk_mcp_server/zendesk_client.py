@@ -278,8 +278,13 @@ class ZendeskClient:
         description: str,
         requester_id: int | None = None,
         assignee_id: int | None = None,
+        group_id: int | None = None,
+        brand_id: int | None = None,
+        ticket_form_id: int | None = None,
         priority: str | None = None,
         type: str | None = None,
+        status: str | None = None,
+        collaborator_ids: List[int] | None = None,
         tags: List[str] | None = None,
         custom_fields: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
@@ -291,8 +296,13 @@ class ZendeskClient:
             description: Ticket description (plain text). Will also be used as initial comment.
             requester_id: Optional requester user ID
             assignee_id: Optional assignee user ID
+            group_id: Optional group ID to assign the ticket to
+            brand_id: Optional brand ID (multi-brand orgs)
+            ticket_form_id: Optional ticket form ID; drives form-based workflows
             priority: Optional priority (low, normal, high, urgent)
             type: Optional ticket type (problem, incident, question, task)
+            status: Optional initial status; Zendesk defaults to 'new' when omitted
+            collaborator_ids: Optional user IDs to add as followers/CCs (Zendesk maps to followers or CCs per org setting)
             tags: Optional list of tags
             custom_fields: Optional list of dicts: {id: int, value: Any}
         """
@@ -302,8 +312,13 @@ class ZendeskClient:
                 description=description,
                 requester_id=requester_id,
                 assignee_id=assignee_id,
+                group_id=group_id,
+                brand_id=brand_id,
+                ticket_form_id=ticket_form_id,
                 priority=priority,
                 type=type,
+                status=status,
+                collaborator_ids=collaborator_ids,
                 tags=tags,
                 custom_fields=custom_fields,
             )
@@ -321,13 +336,17 @@ class ZendeskClient:
                 'id': getattr(created, 'id', created_ticket_id),
                 'subject': getattr(created, 'subject', subject),
                 'description': getattr(created, 'description', description),
-                'status': getattr(created, 'status', 'new'),
+                'status': getattr(created, 'status', status or 'new'),
                 'priority': getattr(created, 'priority', priority),
                 'type': getattr(created, 'type', type),
                 'created_at': str(getattr(created, 'created_at', '')),
                 'updated_at': str(getattr(created, 'updated_at', '')),
                 'requester_id': getattr(created, 'requester_id', requester_id),
                 'assignee_id': getattr(created, 'assignee_id', assignee_id),
+                'group_id': getattr(created, 'group_id', group_id),
+                'brand_id': getattr(created, 'brand_id', brand_id),
+                'ticket_form_id': getattr(created, 'ticket_form_id', ticket_form_id),
+                'collaborator_ids': list(getattr(created, 'collaborator_ids', collaborator_ids or []) or []),
                 'organization_id': getattr(created, 'organization_id', None),
                 'tags': list(getattr(created, 'tags', tags or []) or []),
             }
