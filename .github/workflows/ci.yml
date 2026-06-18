@@ -24,3 +24,9 @@ jobs:
 
       - name: Build the project
         run: uv build
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest

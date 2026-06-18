@@ -26,9 +26,31 @@ _TICKET_FULL_FIELDS: Tuple[str, ...] = _TICKET_SUMMARY_FIELDS + (
 _USER_FIELDS: Tuple[str, ...] = (
     'id', 'name', 'email', 'role', 'active', 'organization_id', 'created_at',
 )
+_ORGANIZATION_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'created_at',
+)
+_GROUP_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'description', 'default', 'deleted', 'created_at',
+)
+_BRAND_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'brand_url', 'subdomain', 'active', 'default',
+)
+_TICKET_FORM_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'display_name', 'active', 'default', 'end_user_visible',
+    'ticket_field_ids',
+)
+_TICKET_FIELD_FIELDS: Tuple[str, ...] = (
+    'id', 'type', 'title', 'active', 'custom_field_options',
+)
+# Each custom_field_options entry on a tagger/multiselect ticket field projects
+# down to this — the join key for interpreting a ticket's custom_fields array.
+_CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
 
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
+
+# show_many endpoints accept at most 100 comma-joined ids per request.
+_SHOW_MANY_MAX_IDS = 100
 
 
 def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
@@ -117,6 +139,42 @@ def _coerce_pagination(
     page_int = 1 if page is None else int(page)
     per_page_int = default_per_page if per_page is None else int(per_page)
     return max(1, page_int), max(1, min(per_page_int, max_per_page))
+
+
+def _coerce_id_list(ids: Any, *, field: str = 'ids') -> List[int]:
+    """Coerce a caller-supplied id collection to a list of ints for a show_many
+    request. Accepts a list/tuple of ints (or int-like strings) or a single
+    comma-separated string. Rejects bool (subclass of int), rejects empty, and
+    *raises* — never silently truncates — when more than _SHOW_MANY_MAX_IDS are
+    requested, since dropping ids would lose records the caller asked for
+    (unlike pagination, which clamps to a still-valid smaller page)."""
+    if ids is None:
+        raise ValueError(f"{field} is required")
+    if isinstance(ids, str):
+        items: List[Any] = [s.strip() for s in ids.split(',') if s.strip()]
+    elif isinstance(ids, (list, tuple)):
+        items = list(ids)
+    else:
+        raise TypeError(
+            f"{field} must be a list of integers or a comma-separated string, "
+            f"got {type(ids).__name__}"
+        )
+
+    coerced: List[int] = []
+    for item in items:
+        if isinstance(item, bool):
+            raise TypeError(f"{field} values must be integers, not bool")
+        coerced.append(int(item))
+
+    if not coerced:
+        raise ValueError(f"{field} must contain at least one id")
+    if len(coerced) > _SHOW_MANY_MAX_IDS:
+        raise ValueError(
+            f"{field} accepts at most {_SHOW_MANY_MAX_IDS} ids per request "
+            f"(got {len(coerced)}); batch the ids into chunks of "
+            f"{_SHOW_MANY_MAX_IDS} or fewer."
+        )
+    return coerced
 
 
 class ZendeskClient:
@@ -480,6 +538,113 @@ class ZendeskClient:
             )
 
         return result
+
+    # --- metadata lookups (resolve IDs / list config) -------------------------
+
+    def get_users(self, ids: Any) -> Dict[str, Any]:
+        """
+        Resolve user IDs to records via /api/v2/users/show_many.json.
+
+        Use to turn requester_id / assignee_id / author_id / collaborator_ids
+        (from tickets, comments, and search results) into names and emails.
+
+        Accepts up to 100 ids. Non-existent ids are silently omitted by Zendesk,
+        so the returned set may be smaller than requested — compare returned ids
+        to the ids you asked for to detect misses.
+        """
+        id_list = _coerce_id_list(ids)
+        params = {'ids': ','.join(str(i) for i in id_list)}
+        data = self._get_json('users/show_many.json', params, error_context='get users by id')
+        users = [_project(u, _USER_FIELDS) for u in data.get('users', [])]
+        return {'count': len(users), 'users': users}
+
+    def get_organizations(self, ids: Any) -> Dict[str, Any]:
+        """
+        Resolve organization IDs to records via
+        /api/v2/organizations/show_many.json.
+
+        Use to turn organization_id (from tickets/users/search results) into org
+        names. Accepts up to 100 ids. Non-existent ids are silently omitted.
+        """
+        id_list = _coerce_id_list(ids)
+        params = {'ids': ','.join(str(i) for i in id_list)}
+        data = self._get_json(
+            'organizations/show_many.json', params,
+            error_context='get organizations by id',
+        )
+        orgs = [_project(o, _ORGANIZATION_FIELDS) for o in data.get('organizations', [])]
+        return {'count': len(orgs), 'organizations': orgs}
+
+    def list_groups(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """
+        List agent groups via /api/v2/groups.json. Use to resolve group_id to a
+        group name. Group sets are small; one page is usually enough.
+        """
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('groups.json', params, error_context='list groups')
+        groups = [_project(g, _GROUP_FIELDS) for g in data.get('groups', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(groups),
+            'has_more': data.get('next_page') is not None or len(groups) == per_page,
+            'groups': groups,
+        }
+
+    def list_brands(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """
+        List brands via /api/v2/brands.json (multi-brand orgs). Use to resolve
+        brand_id to a brand name/subdomain. May use cursor pagination, in which
+        case next_page is absent — has_more then falls back to a full page.
+        """
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('brands.json', params, error_context='list brands')
+        brands = [_project(b, _BRAND_FIELDS) for b in data.get('brands', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(brands),
+            'has_more': data.get('next_page') is not None or len(brands) == per_page,
+            'brands': brands,
+        }
+
+    def list_ticket_forms(self) -> Dict[str, Any]:
+        """
+        List ticket forms via /api/v2/ticket_forms.json. Use to resolve
+        ticket_form_id to a form name. The endpoint returns all forms.
+        """
+        data = self._get_json('ticket_forms.json', {}, error_context='list ticket forms')
+        forms = [_project(f, _TICKET_FORM_FIELDS) for f in data.get('ticket_forms', [])]
+        return {'count': len(forms), 'ticket_forms': forms}
+
+    def list_ticket_fields(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """
+        List ticket fields via /api/v2/ticket_fields.json. Each field includes
+        custom_field_options (id/name/value) for tagger/multiselect fields — the
+        map needed to interpret a ticket's custom_fields array (each {id, value}
+        joins to an option's value). May use cursor pagination.
+        """
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('ticket_fields.json', params, error_context='list ticket fields')
+        fields = []
+        for f in data.get('ticket_fields', []):
+            row = _project(f, _TICKET_FIELD_FIELDS)
+            options = row.get('custom_field_options')
+            if options:
+                row['custom_field_options'] = [
+                    _project(opt, _CUSTOM_FIELD_OPTION_FIELDS) for opt in options
+                ]
+            fields.append(row)
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(fields),
+            'has_more': data.get('next_page') is not None or len(fields) == per_page,
+            'ticket_fields': fields,
+        }
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
