@@ -336,6 +336,111 @@ async def handle_list_tools() -> list[types.Tool]:
                 },
                 "required": ["ticket_id"]
             }
+        ),
+        types.Tool(
+            name="get_users",
+            description=(
+                "Resolve Zendesk user IDs to records. Use to turn requester_id, "
+                "assignee_id, author_id, or collaborator_ids (from tickets, comments, "
+                "and search results) into names and emails. Accepts up to 100 ids per "
+                "call. Non-existent ids are silently omitted, so the returned set may "
+                "be smaller than requested. Returns id, name, email, role, active, "
+                "organization_id, created_at per user."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "User IDs to resolve (max 100)."
+                    }
+                },
+                "required": ["ids"]
+            }
+        ),
+        types.Tool(
+            name="get_organizations",
+            description=(
+                "Resolve Zendesk organization IDs to records. Use to turn "
+                "organization_id (from tickets, users, and search results) into org "
+                "names. Accepts up to 100 ids per call. Non-existent ids are silently "
+                "omitted. Returns id, name, created_at per organization."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Organization IDs to resolve (max 100)."
+                    }
+                },
+                "required": ["ids"]
+            }
+        ),
+        types.Tool(
+            name="list_groups",
+            description=(
+                "List agent groups. Use to resolve group_id to a group name. Group "
+                "sets are small; one page is usually enough. Returns id, name, "
+                "description, default, deleted, created_at per group."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "description": "1-based page number.", "default": 1},
+                    "per_page": {"type": "integer", "description": "Results per page (1-100).", "default": 100}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="list_brands",
+            description=(
+                "List brands (multi-brand orgs). Use to resolve brand_id to a brand "
+                "name/subdomain. Returns id, name, brand_url, subdomain, active, "
+                "default per brand."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "description": "1-based page number.", "default": 1},
+                    "per_page": {"type": "integer", "description": "Results per page (1-100).", "default": 100}
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="list_ticket_forms",
+            description=(
+                "List ticket forms. Use to resolve ticket_form_id to a form name. "
+                "Returns all forms (id, name, display_name, active, default, "
+                "end_user_visible, ticket_field_ids)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="list_ticket_fields",
+            description=(
+                "List ticket fields, including custom_field_options (id/name/value) "
+                "for tagger/multiselect fields. Use this to interpret a ticket's "
+                "custom_fields array: each {id, value} joins to a ticket field by id, "
+                "and the value maps to an option's value/name. Returns id, type, "
+                "title, active, custom_field_options per field."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "description": "1-based page number.", "default": 1},
+                    "per_page": {"type": "integer", "description": "Results per page (1-100).", "default": 100}
+                },
+                "required": []
+            }
         )
     ]
 
@@ -478,6 +583,61 @@ async def handle_call_tool(
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"message": "Ticket updated successfully", "ticket": updated}, indent=2)
+            )]
+
+        elif name == "get_users":
+            if not arguments or arguments.get("ids") is None:
+                raise ValueError("ids is required")
+            result = zendesk_client.get_users(arguments["ids"])
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "get_organizations":
+            if not arguments or arguments.get("ids") is None:
+                raise ValueError("ids is required")
+            result = zendesk_client.get_organizations(arguments["ids"])
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "list_groups":
+            result = zendesk_client.list_groups(
+                page=(arguments or {}).get("page", 1),
+                per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "list_brands":
+            result = zendesk_client.list_brands(
+                page=(arguments or {}).get("page", 1),
+                per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "list_ticket_forms":
+            result = zendesk_client.list_ticket_forms()
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "list_ticket_fields":
+            result = zendesk_client.list_ticket_fields(
+                page=(arguments or {}).get("page", 1),
+                per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
             )]
 
         else:

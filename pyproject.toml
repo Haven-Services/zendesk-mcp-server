@@ -8,6 +8,13 @@ dependencies = [
     "mcp>=1.1.2",
     "python-dotenv>=1.0.1",
     "zenpy>=2.0.56",
+    "requests>=2.32",
+    "cachetools>=5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
 ]
 
 [build-system]
