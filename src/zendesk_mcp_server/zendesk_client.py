@@ -48,10 +48,16 @@ _CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
 _MACRO_FIELDS: Tuple[str, ...] = (
     'id', 'title', 'active', 'restriction', 'actions', 'created_at', 'updated_at',
 )
+_MACRO_LIST_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'restriction', 'created_at', 'updated_at',
+)  # no 'actions' — call get_macro for the full actions array
 _TRIGGER_FIELDS: Tuple[str, ...] = (
     'id', 'title', 'active', 'conditions', 'actions', 'category_id',
     'created_at', 'updated_at',
 )
+_TRIGGER_LIST_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'category_id', 'created_at', 'updated_at',
+)  # no 'conditions', no 'actions' — call get_trigger for the full sets
 
 _TICKET_FIELD_TYPES = frozenset({
     'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
@@ -781,7 +787,7 @@ class ZendeskClient:
         page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
         params = {'page': str(page), 'per_page': str(per_page)}
         data = self._get_json('macros.json', params, error_context='list macros')
-        macros = [_project(m, _MACRO_FIELDS) for m in data.get('macros', [])]
+        macros = [_project(m, _MACRO_LIST_FIELDS) for m in data.get('macros', [])]
         return {
             'page': page,
             'per_page': per_page,
@@ -822,7 +828,7 @@ class ZendeskClient:
         page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
         params = {'page': str(page), 'per_page': str(per_page)}
         data = self._get_json('triggers.json', params, error_context='list triggers')
-        triggers = [_project(t, _TRIGGER_FIELDS) for t in data.get('triggers', [])]
+        triggers = [_project(t, _TRIGGER_LIST_FIELDS) for t in data.get('triggers', [])]
         return {
             'page': page,
             'per_page': per_page,

@@ -296,6 +296,11 @@ class TestBuildTicketFieldPayload:
         out = _build_ticket_field_payload({"title": "Renamed"})
         assert out == {"ticket_field": {"title": "Renamed"}}
 
+    def test_tagger_empty_options_rejected(self):
+        # An empty list is falsy — must be rejected the same as a missing key.
+        with pytest.raises(ValueError, match="custom_field_options"):
+            _build_ticket_field_payload({"type": "tagger", "title": "x", "custom_field_options": []})
+
 
 # --- _build_ticket_form_payload ------------------------------------------
 
@@ -313,6 +318,11 @@ class TestBuildTicketFormPayload:
     def test_update_partial_ok(self):
         out = _build_ticket_form_payload({"active": False})
         assert out == {"ticket_form": {"active": False}}
+
+    def test_tuple_field_ids_accepted(self):
+        # tuple is a valid sequence type for ticket_field_ids.
+        out = _build_ticket_form_payload({"ticket_field_ids": (1, 2)})
+        assert out == {"ticket_form": {"ticket_field_ids": (1, 2)}}
 
 
 # --- _build_macro_payload ---------------------------------------------------
