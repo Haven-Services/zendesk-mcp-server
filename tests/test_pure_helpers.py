@@ -17,6 +17,7 @@ from zendesk_mcp_server.zendesk_client import (
     _build_ticket_field_payload,
     _build_ticket_form_payload,
     _build_macro_payload,
+    _build_trigger_payload,
     _coerce_id_list,
     _coerce_pagination,
     _compose_zql,
@@ -335,3 +336,29 @@ class TestBuildMacroPayload:
     def test_update_partial_ok(self):
         out = _build_macro_payload({"active": False})
         assert out == {"macro": {"active": False}}
+
+
+# --- _build_trigger_payload -------------------------------------------------
+
+class TestBuildTriggerPayload:
+    def test_wraps_and_drops_none(self):
+        out = _build_trigger_payload({
+            "title": "Email -> Hardware",
+            "conditions": {"all": [{"field": "status", "operator": "is", "value": "new"}], "any": []},
+            "actions": [{"field": "group_id", "value": "21014104298395"}],
+            "category_id": None,
+        })
+        assert out["trigger"]["title"] == "Email -> Hardware"
+        assert "category_id" not in out["trigger"]
+
+    def test_conditions_must_be_dict(self):
+        with pytest.raises(TypeError, match="conditions"):
+            _build_trigger_payload({"title": "x", "conditions": [], "actions": []})
+
+    def test_actions_must_be_list(self):
+        with pytest.raises(TypeError, match="actions"):
+            _build_trigger_payload({"title": "x", "actions": {"field": "group_id"}})
+
+    def test_update_partial_ok(self):
+        out = _build_trigger_payload({"active": False})
+        assert out == {"trigger": {"active": False}}

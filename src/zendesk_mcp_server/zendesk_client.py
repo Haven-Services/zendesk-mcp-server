@@ -48,6 +48,10 @@ _CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
 _MACRO_FIELDS: Tuple[str, ...] = (
     'id', 'title', 'active', 'restriction', 'actions', 'created_at', 'updated_at',
 )
+_TRIGGER_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'conditions', 'actions', 'category_id',
+    'created_at', 'updated_at',
+)
 
 _TICKET_FIELD_TYPES = frozenset({
     'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
@@ -101,6 +105,19 @@ def _build_macro_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     if actions is not None and not isinstance(actions, list):
         raise TypeError("macro actions must be a list of {field, value} dicts")
     return {'macro': body}
+
+
+def _build_trigger_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'trigger': {...}} envelope, dropping None values. Supplied
+    conditions ({all, any}) and actions (list) REPLACE the existing sets wholesale."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    conditions = body.get('conditions')
+    if conditions is not None and not isinstance(conditions, dict):
+        raise TypeError("trigger conditions must be a dict with 'all' and/or 'any' lists")
+    actions = body.get('actions')
+    if actions is not None and not isinstance(actions, list):
+        raise TypeError("trigger actions must be a list of {field, value} dicts")
+    return {'trigger': body}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -798,6 +815,47 @@ class ZendeskClient:
             error_context=f'update macro {macro_id}',
         )
         return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def list_triggers(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """List triggers via GET /api/v2/triggers.json. Lean projection — call
+        get_trigger for one trigger's full conditions + actions."""
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('triggers.json', params, error_context='list triggers')
+        triggers = [_project(t, _TRIGGER_FIELDS) for t in data.get('triggers', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(triggers),
+            'has_more': data.get('next_page') is not None or len(triggers) == per_page,
+            'triggers': triggers,
+        }
+
+    def get_trigger(self, trigger_id: int) -> Dict[str, Any]:
+        """Get one trigger via GET /api/v2/triggers/{id}.json, including its full
+        conditions + actions — fetch before update_trigger to edit safely."""
+        data = self._get_json(
+            f'triggers/{int(trigger_id)}.json', {}, error_context=f'get trigger {trigger_id}'
+        )
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    def create_trigger(self, **fields: Any) -> Dict[str, Any]:
+        """Create a trigger via POST /api/v2/triggers.json. Requires title,
+        conditions {all, any}, and actions [{field, value}]."""
+        payload = _build_trigger_payload(fields)
+        data = self._send_json('POST', 'triggers.json', payload, error_context='create trigger')
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    def update_trigger(self, trigger_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a trigger via PUT /api/v2/triggers/{id}.json. Supplied
+        conditions and actions REPLACE the existing sets — fetch with
+        get_trigger, edit, then send the full arrays."""
+        payload = _build_trigger_payload(fields)
+        data = self._send_json(
+            'PUT', f'triggers/{int(trigger_id)}.json', payload,
+            error_context=f'update trigger {trigger_id}',
+        )
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
