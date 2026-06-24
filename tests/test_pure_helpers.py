@@ -5,6 +5,11 @@ NOT import zendesk_mcp_server.server — that module constructs a ZendeskClient 
 import time, which needs env vars. The functions under test here are pure:
 no network, no env, no mocks.
 """
+import io
+import json as _json
+import urllib.error
+from contextlib import contextmanager
+
 import pytest
 
 from zendesk_mcp_server.zendesk_client import (
@@ -15,6 +20,7 @@ from zendesk_mcp_server.zendesk_client import (
     _project,
     _zql_format_value,
     _zql_separator,
+    ZendeskClient,
 )
 
 
@@ -206,3 +212,52 @@ class TestProject:
 
     def test_empty_fields_yields_empty_dict(self):
         assert _project({"id": 1}, ()) == {}
+
+
+# --- _send_json (POST/PUT transport) -----------------------------------------
+
+def _client():
+    # __init__ does no network — safe to construct with dummy creds.
+    return ZendeskClient(subdomain="testsub", email="a@b.com", token="tok")
+
+
+class TestSendJson:
+    def test_post_sends_method_body_and_auth(self, monkeypatch):
+        captured = {}
+
+        @contextmanager
+        def fake_urlopen(req, timeout=None):
+            captured["method"] = req.get_method()
+            captured["url"] = req.full_url
+            captured["body"] = req.data
+            captured["auth"] = req.get_header("Authorization")
+            yield io.BytesIO(b'{"macro": {"id": 5}}')
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        out = _client()._send_json(
+            "POST", "macros.json", {"macro": {"title": "t"}},
+            error_context="create macro",
+        )
+        assert out == {"macro": {"id": 5}}
+        assert captured["method"] == "POST"
+        assert captured["url"] == "https://testsub.zendesk.com/api/v2/macros.json"
+        assert _json.loads(captured["body"]) == {"macro": {"title": "t"}}
+        assert captured["auth"].startswith("Basic ")
+
+    def test_http_error_surfaces_response_body(self, monkeypatch):
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 422, "Unprocessable Entity", {},
+                io.BytesIO(b'{"description":"Invalid action field"}'),
+            )
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        with pytest.raises(Exception) as ei:
+            _client()._send_json(
+                "PUT", "macros/5.json", {"macro": {}},
+                error_context="update macro 5",
+            )
+        msg = str(ei.value)
+        assert "update macro 5" in msg
+        assert "422" in msg
+        assert "Invalid action field" in msg

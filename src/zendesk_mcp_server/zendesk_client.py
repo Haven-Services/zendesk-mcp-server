@@ -226,6 +226,33 @@ class ZendeskClient:
             error_body = e.read().decode('utf-8', errors='replace') if e.fp else "No response body"
             raise Exception(f"Failed to {error_context}: HTTP {e.code} - {e.reason}. {error_body}")
 
+    def _send_json(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any],
+        *,
+        error_context: str,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        """Authenticated POST/PUT against the Zendesk REST API. Returns decoded JSON.
+
+        Mirrors `_get_json`: HTTP errors re-raise as `Exception` carrying the
+        response body (where Zendesk explains 422 reasons); other exceptions
+        propagate with their original type.
+        """
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header('Authorization', self.auth_header)
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8', errors='replace') if e.fp else "No response body"
+            raise Exception(f"Failed to {error_context}: HTTP {e.code} - {e.reason}. {error_body}")
+
     # --- Zenpy-backed methods (unchanged shape) -------------------------------
 
     def get_ticket(self, ticket_id: int) -> Dict[str, Any]:
