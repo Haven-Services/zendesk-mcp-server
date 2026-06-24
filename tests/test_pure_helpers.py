@@ -16,6 +16,7 @@ from zendesk_mcp_server.zendesk_client import (
     _SHOW_MANY_MAX_IDS,
     _build_ticket_field_payload,
     _build_ticket_form_payload,
+    _build_macro_payload,
     _coerce_id_list,
     _coerce_pagination,
     _compose_zql,
@@ -311,3 +312,26 @@ class TestBuildTicketFormPayload:
     def test_update_partial_ok(self):
         out = _build_ticket_form_payload({"active": False})
         assert out == {"ticket_form": {"active": False}}
+
+
+# --- _build_macro_payload ---------------------------------------------------
+
+class TestBuildMacroPayload:
+    def test_wraps_and_drops_none(self):
+        out = _build_macro_payload({
+            "title": "Intake",
+            "actions": [{"field": "status", "value": "pending"}],
+            "restriction": None,
+        })
+        assert out == {"macro": {
+            "title": "Intake",
+            "actions": [{"field": "status", "value": "pending"}],
+        }}
+
+    def test_actions_must_be_list(self):
+        with pytest.raises(TypeError, match="actions"):
+            _build_macro_payload({"title": "x", "actions": {"field": "status"}})
+
+    def test_update_partial_ok(self):
+        out = _build_macro_payload({"active": False})
+        assert out == {"macro": {"active": False}}

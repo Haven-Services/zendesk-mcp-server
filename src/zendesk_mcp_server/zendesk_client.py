@@ -45,6 +45,9 @@ _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
 # Each custom_field_options entry on a tagger/multiselect ticket field projects
 # down to this — the join key for interpreting a ticket's custom_fields array.
 _CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
+_MACRO_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'restriction', 'actions', 'created_at', 'updated_at',
+)
 
 _TICKET_FIELD_TYPES = frozenset({
     'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
@@ -88,6 +91,16 @@ def _build_ticket_form_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     if field_ids is not None and not isinstance(field_ids, (list, tuple)):
         raise TypeError("ticket_field_ids must be a list of field IDs")
     return {'ticket_form': body}
+
+
+def _build_macro_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'macro': {...}} envelope, dropping None values. A supplied
+    actions list REPLACES the macro's entire action set (no partial update)."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    actions = body.get('actions')
+    if actions is not None and not isinstance(actions, list):
+        raise TypeError("macro actions must be a list of {field, value} dicts")
+    return {'macro': body}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -744,6 +757,47 @@ class ZendeskClient:
             error_context=f'update ticket field {ticket_field_id}',
         )
         return _project(data.get('ticket_field', {}), _TICKET_FIELD_FIELDS)
+
+    def list_macros(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """List macros via GET /api/v2/macros.json. Lean projection — call
+        get_macro for a single macro's full actions array."""
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('macros.json', params, error_context='list macros')
+        macros = [_project(m, _MACRO_FIELDS) for m in data.get('macros', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(macros),
+            'has_more': data.get('next_page') is not None or len(macros) == per_page,
+            'macros': macros,
+        }
+
+    def get_macro(self, macro_id: int) -> Dict[str, Any]:
+        """Get one macro via GET /api/v2/macros/{id}.json, including its full
+        actions array — fetch this before update_macro to edit actions safely."""
+        data = self._get_json(
+            f'macros/{int(macro_id)}.json', {}, error_context=f'get macro {macro_id}'
+        )
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def create_macro(self, **fields: Any) -> Dict[str, Any]:
+        """Create a macro via POST /api/v2/macros.json. Requires title + actions
+        [{field, value}]. Omit restriction for All Agents."""
+        payload = _build_macro_payload(fields)
+        data = self._send_json('POST', 'macros.json', payload, error_context='create macro')
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def update_macro(self, macro_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a macro via PUT /api/v2/macros/{id}.json. A supplied actions
+        list REPLACES all actions — fetch with get_macro, edit, then send the
+        full array."""
+        payload = _build_macro_payload(fields)
+        data = self._send_json(
+            'PUT', f'macros/{int(macro_id)}.json', payload,
+            error_context=f'update macro {macro_id}',
+        )
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
