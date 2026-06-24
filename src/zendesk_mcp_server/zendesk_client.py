@@ -46,6 +46,12 @@ _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
 # down to this — the join key for interpreting a ticket's custom_fields array.
 _CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
 
+_TICKET_FIELD_TYPES = frozenset({
+    'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
+    'regexp', 'multiselect', 'tagger',
+})
+_OPTION_REQUIRED_FIELD_TYPES = frozenset({'tagger', 'multiselect'})
+
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
 
@@ -55,6 +61,23 @@ _SHOW_MANY_MAX_IDS = 100
 
 def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
     return {k: record.get(k) for k in fields}
+
+
+def _build_ticket_field_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'ticket_field': {...}} envelope, dropping None values so the
+    same builder serves create and update. Validates the type enum and that
+    tagger/multiselect fields carry non-empty custom_field_options."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    ftype = body.get('type')
+    if ftype is not None and ftype not in _TICKET_FIELD_TYPES:
+        raise ValueError(
+            f"Unsupported ticket field type {ftype!r}; one of {sorted(_TICKET_FIELD_TYPES)}"
+        )
+    if ftype in _OPTION_REQUIRED_FIELD_TYPES and not body.get('custom_field_options'):
+        raise ValueError(
+            f"ticket field type {ftype!r} requires non-empty custom_field_options"
+        )
+    return {'ticket_field': body}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -672,6 +695,25 @@ class ZendeskClient:
             'has_more': data.get('next_page') is not None or len(fields) == per_page,
             'ticket_fields': fields,
         }
+
+    def create_ticket_field(self, **fields: Any) -> Dict[str, Any]:
+        """Create a ticket field via POST /api/v2/ticket_fields.json.
+        tagger/multiselect require custom_field_options [{name, value}]."""
+        payload = _build_ticket_field_payload(fields)
+        data = self._send_json(
+            'POST', 'ticket_fields.json', payload, error_context='create ticket field'
+        )
+        return _project(data.get('ticket_field', {}), _TICKET_FIELD_FIELDS)
+
+    def update_ticket_field(self, ticket_field_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a ticket field via PUT /api/v2/ticket_fields/{id}.json.
+        A supplied custom_field_options list replaces the existing option set."""
+        payload = _build_ticket_field_payload(fields)
+        data = self._send_json(
+            'PUT', f'ticket_fields/{int(ticket_field_id)}.json', payload,
+            error_context=f'update ticket field {ticket_field_id}',
+        )
+        return _project(data.get('ticket_field', {}), _TICKET_FIELD_FIELDS)
 
     def get_all_articles(self) -> Dict[str, Any]:
         """

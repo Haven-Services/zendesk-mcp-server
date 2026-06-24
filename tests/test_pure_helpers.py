@@ -14,6 +14,7 @@ import pytest
 
 from zendesk_mcp_server.zendesk_client import (
     _SHOW_MANY_MAX_IDS,
+    _build_ticket_field_payload,
     _coerce_id_list,
     _coerce_pagination,
     _compose_zql,
@@ -261,3 +262,33 @@ class TestSendJson:
         assert "update macro 5" in msg
         assert "422" in msg
         assert "Invalid action field" in msg
+
+
+# --- _build_ticket_field_payload -----------------------------------------
+
+class TestBuildTicketFieldPayload:
+    def test_drops_none_and_wraps(self):
+        out = _build_ticket_field_payload(
+            {"type": "text", "title": "Ship-to Address", "description": None}
+        )
+        assert out == {"ticket_field": {"type": "text", "title": "Ship-to Address"}}
+
+    def test_tagger_requires_options(self):
+        with pytest.raises(ValueError, match="custom_field_options"):
+            _build_ticket_field_payload({"type": "tagger", "title": "Job Type"})
+
+    def test_tagger_with_options_ok(self):
+        out = _build_ticket_field_payload({
+            "type": "multiselect", "title": "HW",
+            "custom_field_options": [{"name": "Laptop", "value": "laptop"}],
+        })
+        assert out["ticket_field"]["type"] == "multiselect"
+
+    def test_bad_type_rejected(self):
+        with pytest.raises(ValueError, match="Unsupported ticket field type"):
+            _build_ticket_field_payload({"type": "lookup", "title": "x"})
+
+    def test_update_without_type_skips_option_check(self):
+        # update may send only mutable fields, no type — must not raise.
+        out = _build_ticket_field_payload({"title": "Renamed"})
+        assert out == {"ticket_field": {"title": "Renamed"}}
