@@ -15,6 +15,7 @@ import pytest
 from zendesk_mcp_server.zendesk_client import (
     _SHOW_MANY_MAX_IDS,
     _build_ticket_field_payload,
+    _build_ticket_form_payload,
     _coerce_id_list,
     _coerce_pagination,
     _compose_zql,
@@ -292,3 +293,21 @@ class TestBuildTicketFieldPayload:
         # update may send only mutable fields, no type — must not raise.
         out = _build_ticket_field_payload({"title": "Renamed"})
         assert out == {"ticket_field": {"title": "Renamed"}}
+
+
+# --- _build_ticket_form_payload ------------------------------------------
+
+class TestBuildTicketFormPayload:
+    def test_drops_none_and_wraps(self):
+        out = _build_ticket_form_payload(
+            {"name": "Hardware Request", "ticket_field_ids": [1, 2, 3], "default": None}
+        )
+        assert out == {"ticket_form": {"name": "Hardware Request", "ticket_field_ids": [1, 2, 3]}}
+
+    def test_field_ids_must_be_list(self):
+        with pytest.raises(TypeError, match="ticket_field_ids"):
+            _build_ticket_form_payload({"name": "x", "ticket_field_ids": 5})
+
+    def test_update_partial_ok(self):
+        out = _build_ticket_form_payload({"active": False})
+        assert out == {"ticket_form": {"active": False}}

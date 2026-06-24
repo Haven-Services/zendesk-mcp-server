@@ -80,6 +80,16 @@ def _build_ticket_field_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {'ticket_field': body}
 
 
+def _build_ticket_form_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'ticket_form': {...}} envelope, dropping None values. A
+    supplied ticket_field_ids list is ordered and replaces the form's field set."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    field_ids = body.get('ticket_field_ids')
+    if field_ids is not None and not isinstance(field_ids, (list, tuple)):
+        raise TypeError("ticket_field_ids must be a list of field IDs")
+    return {'ticket_form': body}
+
+
 def _zql_format_value(v: Any) -> str:
     """Format a Python value as a ZQL operand. Bools → ZQL lowercase. Values with
     whitespace or embedded quotes get double-quoted (and embedded quotes escaped)."""
@@ -668,6 +678,26 @@ class ZendeskClient:
         data = self._get_json('ticket_forms.json', {}, error_context='list ticket forms')
         forms = [_project(f, _TICKET_FORM_FIELDS) for f in data.get('ticket_forms', [])]
         return {'count': len(forms), 'ticket_forms': forms}
+
+    def create_ticket_form(self, **fields: Any) -> Dict[str, Any]:
+        """Create a ticket form via POST /api/v2/ticket_forms.json.
+        ticket_field_ids is an ordered list driving field display order."""
+        payload = _build_ticket_form_payload(fields)
+        data = self._send_json(
+            'POST', 'ticket_forms.json', payload, error_context='create ticket form'
+        )
+        return _project(data.get('ticket_form', {}), _TICKET_FORM_FIELDS)
+
+    def update_ticket_form(self, ticket_form_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a ticket form via PUT /api/v2/ticket_forms/{id}.json.
+        A supplied ticket_field_ids list REPLACES the form's field set (send the
+        full ordered list, not just additions)."""
+        payload = _build_ticket_form_payload(fields)
+        data = self._send_json(
+            'PUT', f'ticket_forms/{int(ticket_form_id)}.json', payload,
+            error_context=f'update ticket form {ticket_form_id}',
+        )
+        return _project(data.get('ticket_form', {}), _TICKET_FORM_FIELDS)
 
     def list_ticket_fields(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
         """
