@@ -7,6 +7,7 @@ import urllib.error
 import base64
 import requests as _requests
 
+from markdown_it import MarkdownIt
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
@@ -175,6 +176,20 @@ def _coerce_id_list(ids: Any, *, field: str = 'ids') -> List[int]:
             f"{_SHOW_MANY_MAX_IDS} or fewer."
         )
     return coerced
+
+
+# CommonMark, with single newlines kept as <br> and inline HTML passed through, so
+# plain text, markdown and HTML all keep their structure once sent as html_body.
+_COMMENT_MD = MarkdownIt("commonmark", {"breaks": True, "html": True})
+
+
+def _comment_html(comment: str, format: str = "markdown") -> str:
+    """Render a comment to the HTML Zendesk stores as html_body."""
+    if format == "html":
+        return comment
+    if format == "markdown":
+        return _COMMENT_MD.render(comment)
+    raise ValueError(f"format must be 'markdown' or 'html', got {format!r}")
 
 
 class ZendeskClient:
@@ -355,14 +370,17 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to fetch attachment from {content_url}: {str(e)}")
 
-    def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:
+    def post_comment(self, ticket_id: int, comment: str, public: bool = True,
+                     format: str = "markdown") -> str:
         """
-        Post a comment to an existing ticket.
+        Post a comment to an existing ticket. `format` is "markdown" (rendered to
+        HTML here) or "html" (sent as-is); either way Zendesk receives html_body.
         """
+        html_body = _comment_html(comment, format)
         try:
             ticket = self.client.tickets(id=ticket_id)
             ticket.comment = Comment(
-                html_body=comment,
+                html_body=html_body,
                 public=public
             )
             self.client.tickets.update(ticket)

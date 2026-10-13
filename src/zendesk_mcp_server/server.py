@@ -209,7 +209,11 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="create_ticket_comment",
-            description="Create a new comment on an existing Zendesk ticket",
+            description=(
+                "Create a new comment on an existing Zendesk ticket. A public comment is "
+                "emailed to the requester and every CC; set public=false for an internal "
+                "note. @mentions written here are plain text and notify nobody."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -219,12 +223,22 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "comment": {
                         "type": "string",
-                        "description": "The comment text/content to add"
+                        "description": "The comment, in the syntax named by `format`"
                     },
                     "public": {
                         "type": "boolean",
-                        "description": "Whether the comment should be public",
+                        "description": "true emails the requester and CCs; false posts an internal note",
                         "default": True
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "html"],
+                        "description": (
+                            "markdown (default): CommonMark rendered to HTML; blank lines "
+                            "separate paragraphs, single newlines become line breaks, "
+                            "- and 1. lists work. html: sent as-is."
+                        ),
+                        "default": "markdown"
                     }
                 },
                 "required": ["ticket_id", "comment"]
@@ -518,7 +532,8 @@ async def handle_call_tool(
             result = zendesk_client.post_comment(
                 ticket_id=arguments["ticket_id"],
                 comment=arguments["comment"],
-                public=public
+                public=public,
+                format=arguments.get("format", "markdown")
             )
             return [types.TextContent(
                 type="text",
