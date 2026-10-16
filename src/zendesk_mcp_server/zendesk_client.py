@@ -53,6 +53,33 @@ _SEARCH_RESULT_CAP = 1000
 _SHOW_MANY_MAX_IDS = 100
 
 
+def _validate_attachment_url(content_url: str, subdomain: str) -> str:
+    """Allow authenticated attachment requests only to this Zendesk tenant."""
+    if not isinstance(content_url, str) or not content_url:
+        raise ValueError("Attachment URL must be a non-empty string.")
+
+    try:
+        parsed = urllib.parse.urlsplit(content_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Attachment URL is invalid.") from exc
+
+    expected_host = f"{subdomain}.zendesk.com".lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.lower() != expected_host
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(
+            f"Attachment URL must use HTTPS on {expected_host}."
+        )
+
+    return content_url
+
+
 def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
     return {k: record.get(k) for k in fields}
 
@@ -298,6 +325,7 @@ class ZendeskClient:
         Fetch an image attachment and return base64-encoded data.
 
         Security measures applied:
+        - Only the configured tenant's HTTPS host receives Zendesk credentials.
         - Allowlist of safe image MIME types (no SVG or arbitrary binary).
         - Magic byte validation so the file header must match the declared type.
         - 10 MB size cap to prevent image bombs and excessive token usage.
@@ -307,8 +335,9 @@ class ZendeskClient:
         which is required — the CDN returns 403 if it receives an auth header.
         """
         try:
+            validated_url = _validate_attachment_url(content_url, self.subdomain)
             response = _requests.get(
-                content_url,
+                validated_url,
                 headers={'Authorization': self.auth_header},
                 timeout=30,
                 stream=True,
