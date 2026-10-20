@@ -761,7 +761,7 @@ class ZendeskClient:
         Update a Zendesk ticket with provided fields using Zenpy.
 
         Supported fields include common ticket attributes like:
-        subject, status, priority, type, assignee_id, requester_id,
+        subject, status, priority, type, assignee_id, requester_id, group_id,
         tags (list[str]), custom_fields (list[dict]), due_at, etc.
         """
         try:
@@ -789,6 +789,7 @@ class ZendeskClient:
                 'updated_at': str(refreshed.updated_at),
                 'requester_id': refreshed.requester_id,
                 'assignee_id': refreshed.assignee_id,
+                'group_id': getattr(refreshed, 'group_id', None),
                 'organization_id': refreshed.organization_id,
                 'tags': list(getattr(refreshed, 'tags', []) or []),
             }

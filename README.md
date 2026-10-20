@@ -147,7 +147,7 @@ Create a new Zendesk ticket
 
 ### update_ticket
 
-Update fields on an existing Zendesk ticket (e.g., status, priority, assignee)
+Update fields on an existing Zendesk ticket (e.g., status, priority, assignee, group)
 
 - Input:
   - `ticket_id` (integer): The ID of the ticket to update
@@ -157,6 +157,7 @@ Update fields on an existing Zendesk ticket (e.g., status, priority, assignee)
   - `type` (string, optional)
   - `assignee_id` (integer, optional)
   - `requester_id` (integer, optional)
+  - `group_id` (integer, optional): group to move the ticket to
   - `tags` (array[string], optional)
   - `custom_fields` (array[object], optional)
   - `due_at` (string, optional): ISO8601 datetime
