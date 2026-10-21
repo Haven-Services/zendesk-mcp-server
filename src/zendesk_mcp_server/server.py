@@ -319,7 +319,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="update_ticket",
-            description="Update fields on an existing Zendesk ticket (e.g., status, priority, assignee_id)",
+            description="Update fields on an existing Zendesk ticket (e.g., status, priority, assignee_id, group_id)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -330,6 +330,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "type": {"type": "string"},
                     "assignee_id": {"type": "integer"},
                     "requester_id": {"type": "integer"},
+                    "group_id": {"type": "integer", "description": "Group ID to move the ticket to"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "custom_fields": {"type": "array", "items": {"type": "object"}},
                     "due_at": {"type": "string", "description": "ISO8601 datetime"}
