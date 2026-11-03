@@ -13,9 +13,29 @@ from zendesk_mcp_server.zendesk_client import (
     _coerce_pagination,
     _compose_zql,
     _project,
+    _validate_attachment_url,
     _zql_format_value,
     _zql_separator,
 )
+
+
+# --- _validate_attachment_url -----------------------------------------------
+
+class TestValidateAttachmentUrl:
+    def test_accepts_configured_tenant_https_url(self):
+        url = "https://test.zendesk.com/attachments/token/abc/?name=image.png"
+        assert _validate_attachment_url(url, "test") == url
+
+    @pytest.mark.parametrize("url", [
+        "https://attacker.example/image.png",
+        "https://test.zendesk.com.attacker.example/image.png",
+        "http://test.zendesk.com/image.png",
+        "https://test.zendesk.com:444/image.png",
+        "https://attacker.example@test.zendesk.com/image.png",
+    ])
+    def test_rejects_url_that_must_not_receive_credentials(self, url):
+        with pytest.raises(ValueError, match="must use HTTPS"):
+            _validate_attachment_url(url, "test")
 
 
 # --- _zql_format_value -------------------------------------------------------
