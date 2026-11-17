@@ -38,7 +38,7 @@ _BRAND_FIELDS: Tuple[str, ...] = (
 )
 _TICKET_FORM_FIELDS: Tuple[str, ...] = (
     'id', 'name', 'display_name', 'active', 'default', 'end_user_visible',
-    'ticket_field_ids',
+    'ticket_field_ids', 'end_user_conditions', 'agent_conditions',
 )
 _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
     'id', 'type', 'title', 'active', 'custom_field_options',
@@ -121,13 +121,46 @@ def _build_ticket_field_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {'ticket_field': body}
 
 
+_TICKET_FORM_CONDITION_KEYS: Tuple[str, ...] = ('end_user_conditions', 'agent_conditions')
+
+
+def _validate_ticket_form_conditions(key: str, conditions: Any) -> None:
+    """Check the shape of a conditional-field list for a ticket form.
+
+    Each condition is {'parent_field_id': int, 'value': <parent value>,
+    'child_fields': [{'id': int, ...}, ...]}: when the parent field holds the
+    value, the child fields are shown. An empty list is valid and clears the
+    form's conditions."""
+    if not isinstance(conditions, (list, tuple)):
+        raise TypeError(f"{key} must be a list of conditions")
+    for index, condition in enumerate(conditions):
+        where = f"{key}[{index}]"
+        if not isinstance(condition, dict):
+            raise TypeError(f"{where} must be an object")
+        if condition.get('parent_field_id') is None:
+            raise ValueError(f"{where} requires parent_field_id")
+        if 'value' not in condition:
+            raise ValueError(f"{where} requires value")
+        children = condition.get('child_fields')
+        if not isinstance(children, (list, tuple)) or not children:
+            raise ValueError(f"{where} requires a non-empty child_fields list")
+        for child in children:
+            if not isinstance(child, dict) or child.get('id') is None:
+                raise ValueError(f"{where} child_fields entries require id")
+
+
 def _build_ticket_form_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     """Build the {'ticket_form': {...}} envelope, dropping None values. A
-    supplied ticket_field_ids list is ordered and replaces the form's field set."""
+    supplied ticket_field_ids list is ordered and replaces the form's field set.
+    A supplied end_user_conditions or agent_conditions list replaces that
+    condition set."""
     body = {k: v for k, v in fields.items() if v is not None}
     field_ids = body.get('ticket_field_ids')
     if field_ids is not None and not isinstance(field_ids, (list, tuple)):
         raise TypeError("ticket_field_ids must be a list of field IDs")
+    for key in _TICKET_FORM_CONDITION_KEYS:
+        if key in body:
+            _validate_ticket_form_conditions(key, body[key])
     return {'ticket_form': body}
 
 

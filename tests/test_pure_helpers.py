@@ -344,6 +344,65 @@ class TestBuildTicketFormPayload:
         out = _build_ticket_form_payload({"ticket_field_ids": (1, 2)})
         assert out == {"ticket_form": {"ticket_field_ids": (1, 2)}}
 
+    def test_end_user_conditions_pass_through(self):
+        conditions = [
+            {"parent_field_id": 10, "value": "someone_else", "child_fields": [{"id": 11, "is_required": True}]}
+        ]
+        out = _build_ticket_form_payload({"end_user_conditions": conditions})
+        assert out == {"ticket_form": {"end_user_conditions": conditions}}
+
+    def test_agent_conditions_pass_through(self):
+        conditions = [
+            {
+                "parent_field_id": 10,
+                "value": True,
+                "child_fields": [
+                    {"id": 11, "is_required": False, "required_on_statuses": {"type": "NO_STATUSES"}}
+                ],
+            }
+        ]
+        out = _build_ticket_form_payload({"agent_conditions": conditions})
+        assert out == {"ticket_form": {"agent_conditions": conditions}}
+
+    def test_empty_conditions_kept_to_clear(self):
+        # An empty list is the way to remove every condition, so it must be sent.
+        out = _build_ticket_form_payload({"end_user_conditions": []})
+        assert out == {"ticket_form": {"end_user_conditions": []}}
+
+    def test_conditions_must_be_list(self):
+        with pytest.raises(TypeError, match="end_user_conditions"):
+            _build_ticket_form_payload({"end_user_conditions": {"parent_field_id": 1}})
+
+    def test_condition_requires_parent_field_id(self):
+        with pytest.raises(ValueError, match="parent_field_id"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"value": "x", "child_fields": [{"id": 2}]}]}
+            )
+
+    def test_condition_requires_value(self):
+        with pytest.raises(ValueError, match="requires value"):
+            _build_ticket_form_payload(
+                {"agent_conditions": [{"parent_field_id": 1, "child_fields": [{"id": 2}]}]}
+            )
+
+    def test_condition_false_value_accepted(self):
+        # A checkbox parent uses the literal False as its condition value.
+        conditions = [{"parent_field_id": 1, "value": False, "child_fields": [{"id": 2}]}]
+        out = _build_ticket_form_payload({"end_user_conditions": conditions})
+        assert out["ticket_form"]["end_user_conditions"] == conditions
+
+    def test_condition_requires_child_fields(self):
+        with pytest.raises(ValueError, match="child_fields"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"parent_field_id": 1, "value": "x", "child_fields": []}]}
+            )
+
+    def test_condition_child_requires_id(self):
+        with pytest.raises(ValueError, match="require id"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"parent_field_id": 1, "value": "x", "child_fields": [{"is_required": True}]}]}
+            )
+
 
 # --- _build_macro_payload ---------------------------------------------------
 

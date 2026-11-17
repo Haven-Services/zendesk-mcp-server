@@ -431,7 +431,8 @@ async def handle_list_tools() -> list[types.Tool]:
             description=(
                 "List ticket forms. Use to resolve ticket_form_id to a form name. "
                 "Returns all forms (id, name, display_name, active, default, "
-                "end_user_visible, ticket_field_ids)."
+                "end_user_visible, ticket_field_ids, end_user_conditions, "
+                "agent_conditions)."
             ),
             inputSchema={
                 "type": "object",
@@ -511,7 +512,9 @@ async def handle_list_tools() -> list[types.Tool]:
             name="create_ticket_form",
             description=(
                 "Create a ticket form. ticket_field_ids is an ORDERED list of "
-                "field ids driving display order. Writes live to production."
+                "field ids driving display order. end_user_conditions and "
+                "agent_conditions show child fields only when a parent field "
+                "holds a value. Writes live to production."
             ),
             inputSchema={
                 "type": "object",
@@ -523,6 +526,16 @@ async def handle_list_tools() -> list[types.Tool]:
                     "end_user_visible": {"type": "boolean"},
                     "default": {"type": "boolean"},
                     "position": {"type": "integer"},
+                    "end_user_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for end users: [{parent_field_id, value, child_fields: [{id, is_required}]}]. Parent must be a drop-down (value = option tag) or checkbox (value = true/false) on the form. Parent and child fields must be in ticket_field_ids.",
+                    },
+                    "agent_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for agents: [{parent_field_id, value, child_fields: [{id, is_required, required_on_statuses: {type: ALL_STATUSES|NO_STATUSES|SOME_STATUSES, statuses: [...]}}]}]. Parent and child fields must be in ticket_field_ids.",
+                    },
                 },
                 "required": ["name"],
             }
@@ -533,7 +546,8 @@ async def handle_list_tools() -> list[types.Tool]:
                 "Update a ticket form by id. A supplied ticket_field_ids list "
                 "REPLACES the form's field set — send the FULL ordered list, not "
                 "just additions (call list_ticket_forms first to read current ids). "
-                "Writes live to production."
+                "end_user_conditions and agent_conditions likewise REPLACE the "
+                "form's whole condition set. Writes live to production."
             ),
             inputSchema={
                 "type": "object",
@@ -546,6 +560,16 @@ async def handle_list_tools() -> list[types.Tool]:
                     "end_user_visible": {"type": "boolean"},
                     "default": {"type": "boolean"},
                     "position": {"type": "integer"},
+                    "end_user_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for end users: [{parent_field_id, value, child_fields: [{id, is_required}]}]. Parent must be a drop-down (value = option tag) or checkbox (value = true/false) on the form. A supplied list REPLACES all end-user conditions; [] clears them.",
+                    },
+                    "agent_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for agents: [{parent_field_id, value, child_fields: [{id, is_required, required_on_statuses: {type: ALL_STATUSES|NO_STATUSES|SOME_STATUSES, statuses: [...]}}]}]. A supplied list REPLACES all agent conditions; [] clears them.",
+                    },
                 },
                 "required": ["ticket_form_id"],
             }
