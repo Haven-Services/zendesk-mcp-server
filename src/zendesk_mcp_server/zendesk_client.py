@@ -7,6 +7,7 @@ import urllib.error
 import base64
 import requests as _requests
 
+from markdown_it import MarkdownIt
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
@@ -70,6 +71,33 @@ _SEARCH_RESULT_CAP = 1000
 
 # show_many endpoints accept at most 100 comma-joined ids per request.
 _SHOW_MANY_MAX_IDS = 100
+
+
+def _validate_attachment_url(content_url: str, subdomain: str) -> str:
+    """Allow authenticated attachment requests only to this Zendesk tenant."""
+    if not isinstance(content_url, str) or not content_url:
+        raise ValueError("Attachment URL must be a non-empty string.")
+
+    try:
+        parsed = urllib.parse.urlsplit(content_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Attachment URL is invalid.") from exc
+
+    expected_host = f"{subdomain}.zendesk.com".lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.lower() != expected_host
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(
+            f"Attachment URL must use HTTPS on {expected_host}."
+        )
+
+    return content_url
 
 
 def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
@@ -246,6 +274,20 @@ def _coerce_id_list(ids: Any, *, field: str = 'ids') -> List[int]:
     return coerced
 
 
+# CommonMark, with single newlines kept as <br> and inline HTML passed through, so
+# plain text, markdown and HTML all keep their structure once sent as html_body.
+_COMMENT_MD = MarkdownIt("commonmark", {"breaks": True, "html": True})
+
+
+def _comment_html(comment: str, format: str = "markdown") -> str:
+    """Render a comment to the HTML Zendesk stores as html_body."""
+    if format == "html":
+        return comment
+    if format == "markdown":
+        return _COMMENT_MD.render(comment)
+    raise ValueError(f"format must be 'markdown' or 'html', got {format!r}")
+
+
 class ZendeskClient:
     def __init__(self, subdomain: str, email: str, token: str):
         """
@@ -394,6 +436,7 @@ class ZendeskClient:
         Fetch an image attachment and return base64-encoded data.
 
         Security measures applied:
+        - Only the configured tenant's HTTPS host receives Zendesk credentials.
         - Allowlist of safe image MIME types (no SVG or arbitrary binary).
         - Magic byte validation so the file header must match the declared type.
         - 10 MB size cap to prevent image bombs and excessive token usage.
@@ -403,8 +446,9 @@ class ZendeskClient:
         which is required — the CDN returns 403 if it receives an auth header.
         """
         try:
+            validated_url = _validate_attachment_url(content_url, self.subdomain)
             response = _requests.get(
-                content_url,
+                validated_url,
                 headers={'Authorization': self.auth_header},
                 timeout=30,
                 stream=True,
@@ -451,14 +495,17 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to fetch attachment from {content_url}: {str(e)}")
 
-    def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:
+    def post_comment(self, ticket_id: int, comment: str, public: bool = True,
+                     format: str = "markdown") -> str:
         """
-        Post a comment to an existing ticket.
+        Post a comment to an existing ticket. `format` is "markdown" (rendered to
+        HTML here) or "html" (sent as-is); either way Zendesk receives html_body.
         """
+        html_body = _comment_html(comment, format)
         try:
             ticket = self.client.tickets(id=ticket_id)
             ticket.comment = Comment(
-                html_body=comment,
+                html_body=html_body,
                 public=public
             )
             self.client.tickets.update(ticket)
