@@ -431,7 +431,8 @@ async def handle_list_tools() -> list[types.Tool]:
             description=(
                 "List ticket forms. Use to resolve ticket_form_id to a form name. "
                 "Returns all forms (id, name, display_name, active, default, "
-                "end_user_visible, ticket_field_ids)."
+                "end_user_visible, ticket_field_ids, end_user_conditions, "
+                "agent_conditions)."
             ),
             inputSchema={
                 "type": "object",
@@ -455,6 +456,245 @@ async def handle_list_tools() -> list[types.Tool]:
                     "per_page": {"type": "integer", "description": "Results per page (1-100).", "default": 100}
                 },
                 "required": []
+            }
+        ),
+        types.Tool(
+            name="create_ticket_field",
+            description=(
+                "Create a custom ticket field. type is one of text, textarea, "
+                "checkbox, date, integer, decimal, regexp, multiselect, tagger. "
+                "tagger/multiselect REQUIRE custom_field_options [{name, value}]. "
+                "Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "text|textarea|checkbox|date|integer|decimal|regexp|multiselect|tagger"},
+                    "title": {"type": "string", "description": "Agent-facing title"},
+                    "description": {"type": "string"},
+                    "title_in_portal": {"type": "string", "description": "End-user-facing title"},
+                    "visible_in_portal": {"type": "boolean"},
+                    "editable_in_portal": {"type": "boolean"},
+                    "required_in_portal": {"type": "boolean"},
+                    "required": {"type": "boolean"},
+                    "active": {"type": "boolean"},
+                    "custom_field_options": {"type": "array", "items": {"type": "object"}, "description": "tagger/multiselect: [{name, value}]"},
+                    "tag": {"type": "string", "description": "checkbox: tag set when checked"},
+                    "regexp_for_validation": {"type": "string", "description": "regexp type validation pattern"},
+                },
+                "required": ["type", "title"],
+            }
+        ),
+        types.Tool(
+            name="update_ticket_field",
+            description=(
+                "Update a custom ticket field by id. A supplied custom_field_options "
+                "list REPLACES the field's option set. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticket_field_id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "title_in_portal": {"type": "string"},
+                    "visible_in_portal": {"type": "boolean"},
+                    "editable_in_portal": {"type": "boolean"},
+                    "required_in_portal": {"type": "boolean"},
+                    "required": {"type": "boolean"},
+                    "active": {"type": "boolean"},
+                    "custom_field_options": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["ticket_field_id"],
+            }
+        ),
+        types.Tool(
+            name="create_ticket_form",
+            description=(
+                "Create a ticket form. ticket_field_ids is an ORDERED list of "
+                "field ids driving display order. end_user_conditions and "
+                "agent_conditions show child fields only when a parent field "
+                "holds a value. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "description": "Ordered field ids"},
+                    "display_name": {"type": "string"},
+                    "active": {"type": "boolean"},
+                    "end_user_visible": {"type": "boolean"},
+                    "default": {"type": "boolean"},
+                    "position": {"type": "integer"},
+                    "end_user_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for end users: [{parent_field_id, value, child_fields: [{id, is_required}]}]. Parent must be a drop-down (value = option tag) or checkbox (value = true/false) on the form. Parent and child fields must be in ticket_field_ids.",
+                    },
+                    "agent_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for agents: [{parent_field_id, value, child_fields: [{id, is_required, required_on_statuses: {type: ALL_STATUSES|NO_STATUSES|SOME_STATUSES, statuses: [...]}}]}]. Parent and child fields must be in ticket_field_ids.",
+                    },
+                },
+                "required": ["name"],
+            }
+        ),
+        types.Tool(
+            name="update_ticket_form",
+            description=(
+                "Update a ticket form by id. A supplied ticket_field_ids list "
+                "REPLACES the form's field set — send the FULL ordered list, not "
+                "just additions (call list_ticket_forms first to read current ids). "
+                "end_user_conditions and agent_conditions likewise REPLACE the "
+                "form's whole condition set. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticket_form_id": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "description": "Full ordered field-id list (replaces existing)"},
+                    "display_name": {"type": "string"},
+                    "active": {"type": "boolean"},
+                    "end_user_visible": {"type": "boolean"},
+                    "default": {"type": "boolean"},
+                    "position": {"type": "integer"},
+                    "end_user_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for end users: [{parent_field_id, value, child_fields: [{id, is_required}]}]. Parent must be a drop-down (value = option tag) or checkbox (value = true/false) on the form. A supplied list REPLACES all end-user conditions; [] clears them.",
+                    },
+                    "agent_conditions": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Conditional fields for agents: [{parent_field_id, value, child_fields: [{id, is_required, required_on_statuses: {type: ALL_STATUSES|NO_STATUSES|SOME_STATUSES, statuses: [...]}}]}]. A supplied list REPLACES all agent conditions; [] clears them.",
+                    },
+                },
+                "required": ["ticket_form_id"],
+            }
+        ),
+        types.Tool(
+            name="list_macros",
+            description="List macros (lean projection). Call get_macro for one macro's full actions array.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "default": 1},
+                    "per_page": {"type": "integer", "default": 100},
+                },
+                "required": [],
+            }
+        ),
+        types.Tool(
+            name="get_macro",
+            description="Get one macro by id, including its full actions array. Fetch this before update_macro to edit actions safely.",
+            inputSchema={
+                "type": "object",
+                "properties": {"macro_id": {"type": "integer"}},
+                "required": ["macro_id"],
+            }
+        ),
+        types.Tool(
+            name="create_macro",
+            description=(
+                "Create a macro. Requires title and actions [{field, value}]. "
+                "Omit restriction for All Agents; {type:'Group', id:N} or "
+                "{type:'User', id:N} to scope. Action notes: status accepts only "
+                "open/pending/hold/solved (use custom_status_id for custom statuses); "
+                "current_tags adds, set_tags replaces, remove_tags removes; comment "
+                "via comment_value (+ optional comment_value_html). Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "[{field, value}]"},
+                    "restriction": {"type": "object", "description": "Omit=All Agents; {type:'Group'|'User', id|ids}"},
+                    "description": {"type": "string"},
+                    "active": {"type": "boolean"},
+                },
+                "required": ["title", "actions"],
+            }
+        ),
+        types.Tool(
+            name="update_macro",
+            description=(
+                "Update a macro by id. A supplied actions list REPLACES ALL actions "
+                "(no partial update — omitting an action deletes it). Call get_macro, "
+                "edit the array, then send it in full. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "macro_id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "Full action array (replaces existing)"},
+                    "restriction": {"type": "object"},
+                    "active": {"type": "boolean"},
+                },
+                "required": ["macro_id"],
+            }
+        ),
+        types.Tool(
+            name="list_triggers",
+            description="List triggers (lean projection). Call get_trigger for one trigger's full conditions + actions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "default": 1},
+                    "per_page": {"type": "integer", "default": 100},
+                },
+                "required": [],
+            }
+        ),
+        types.Tool(
+            name="get_trigger",
+            description="Get one trigger by id, including full conditions + actions. Fetch before update_trigger to edit safely.",
+            inputSchema={
+                "type": "object",
+                "properties": {"trigger_id": {"type": "integer"}},
+                "required": ["trigger_id"],
+            }
+        ),
+        types.Tool(
+            name="create_trigger",
+            description=(
+                "Create a trigger. Requires title, conditions {all:[{field,operator,value}], "
+                "any:[...]}, and actions [{field, value}]. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "conditions": {"type": "object", "description": "{all:[{field,operator,value}], any:[...]}"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "[{field, value}]"},
+                    "active": {"type": "boolean"},
+                    "category_id": {"type": "string"},
+                    "position": {"type": "integer"},
+                },
+                "required": ["title", "conditions", "actions"],
+            }
+        ),
+        types.Tool(
+            name="update_trigger",
+            description=(
+                "Update a trigger by id. Supplied conditions and actions REPLACE the "
+                "existing sets (no partial update). Call get_trigger, edit, then send "
+                "the full arrays. Writes live to production."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "trigger_id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "conditions": {"type": "object", "description": "Full conditions object (replaces existing)"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "description": "Full action array (replaces existing)"},
+                    "active": {"type": "boolean"},
+                    "category_id": {"type": "string"},
+                    "position": {"type": "integer"},
+                },
+                "required": ["trigger_id"],
             }
         )
     ]
@@ -655,6 +895,84 @@ async def handle_call_tool(
                 type="text",
                 text=json.dumps(result, indent=2)
             )]
+
+        elif name == "create_ticket_field":
+            if not arguments:
+                raise ValueError("Missing arguments")
+            result = zendesk_client.create_ticket_field(**arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Ticket field created", "ticket_field": result}, indent=2))]
+
+        elif name == "update_ticket_field":
+            if not arguments or arguments.get("ticket_field_id") is None:
+                raise ValueError("ticket_field_id is required")
+            field_id = arguments.pop("ticket_field_id")
+            result = zendesk_client.update_ticket_field(int(field_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Ticket field updated", "ticket_field": result}, indent=2))]
+
+        elif name == "create_ticket_form":
+            if not arguments:
+                raise ValueError("Missing arguments")
+            result = zendesk_client.create_ticket_form(**arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Ticket form created", "ticket_form": result}, indent=2))]
+
+        elif name == "update_ticket_form":
+            if not arguments or arguments.get("ticket_form_id") is None:
+                raise ValueError("ticket_form_id is required")
+            form_id = arguments.pop("ticket_form_id")
+            result = zendesk_client.update_ticket_form(int(form_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Ticket form updated", "ticket_form": result}, indent=2))]
+
+        elif name == "list_macros":
+            result = zendesk_client.list_macros(
+                page=(arguments or {}).get("page", 1),
+                per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_macro":
+            if not arguments or arguments.get("macro_id") is None:
+                raise ValueError("macro_id is required")
+            result = zendesk_client.get_macro(int(arguments["macro_id"]))
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "create_macro":
+            if not arguments:
+                raise ValueError("Missing arguments")
+            result = zendesk_client.create_macro(**arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Macro created", "macro": result}, indent=2))]
+
+        elif name == "update_macro":
+            if not arguments or arguments.get("macro_id") is None:
+                raise ValueError("macro_id is required")
+            macro_id = arguments.pop("macro_id")
+            result = zendesk_client.update_macro(int(macro_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Macro updated", "macro": result}, indent=2))]
+
+        elif name == "list_triggers":
+            result = zendesk_client.list_triggers(
+                page=(arguments or {}).get("page", 1),
+                per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_trigger":
+            if not arguments or arguments.get("trigger_id") is None:
+                raise ValueError("trigger_id is required")
+            result = zendesk_client.get_trigger(int(arguments["trigger_id"]))
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "create_trigger":
+            if not arguments:
+                raise ValueError("Missing arguments")
+            result = zendesk_client.create_trigger(**arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Trigger created", "trigger": result}, indent=2))]
+
+        elif name == "update_trigger":
+            if not arguments or arguments.get("trigger_id") is None:
+                raise ValueError("trigger_id is required")
+            trigger_id = arguments.pop("trigger_id")
+            result = zendesk_client.update_trigger(int(trigger_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Trigger updated", "trigger": result}, indent=2))]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

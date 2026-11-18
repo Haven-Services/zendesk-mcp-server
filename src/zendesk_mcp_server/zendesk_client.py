@@ -38,7 +38,7 @@ _BRAND_FIELDS: Tuple[str, ...] = (
 )
 _TICKET_FORM_FIELDS: Tuple[str, ...] = (
     'id', 'name', 'display_name', 'active', 'default', 'end_user_visible',
-    'ticket_field_ids',
+    'ticket_field_ids', 'end_user_conditions', 'agent_conditions',
 )
 _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
     'id', 'type', 'title', 'active', 'custom_field_options',
@@ -46,6 +46,25 @@ _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
 # Each custom_field_options entry on a tagger/multiselect ticket field projects
 # down to this — the join key for interpreting a ticket's custom_fields array.
 _CUSTOM_FIELD_OPTION_FIELDS: Tuple[str, ...] = ('id', 'name', 'value')
+_MACRO_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'restriction', 'actions', 'created_at', 'updated_at',
+)
+_MACRO_LIST_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'restriction', 'created_at', 'updated_at',
+)  # no 'actions' — call get_macro for the full actions array
+_TRIGGER_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'conditions', 'actions', 'category_id',
+    'created_at', 'updated_at',
+)
+_TRIGGER_LIST_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'active', 'category_id', 'created_at', 'updated_at',
+)  # no 'conditions', no 'actions' — call get_trigger for the full sets
+
+_TICKET_FIELD_TYPES = frozenset({
+    'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
+    'regexp', 'multiselect', 'tagger',
+})
+_OPTION_REQUIRED_FIELD_TYPES = frozenset({'tagger', 'multiselect'})
 
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
@@ -83,6 +102,89 @@ def _validate_attachment_url(content_url: str, subdomain: str) -> str:
 
 def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
     return {k: record.get(k) for k in fields}
+
+
+def _build_ticket_field_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'ticket_field': {...}} envelope, dropping None values so the
+    same builder serves create and update. Validates the type enum and that
+    tagger/multiselect fields carry non-empty custom_field_options."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    ftype = body.get('type')
+    if ftype is not None and ftype not in _TICKET_FIELD_TYPES:
+        raise ValueError(
+            f"Unsupported ticket field type {ftype!r}; one of {sorted(_TICKET_FIELD_TYPES)}"
+        )
+    if ftype in _OPTION_REQUIRED_FIELD_TYPES and not body.get('custom_field_options'):
+        raise ValueError(
+            f"ticket field type {ftype!r} requires non-empty custom_field_options"
+        )
+    return {'ticket_field': body}
+
+
+_TICKET_FORM_CONDITION_KEYS: Tuple[str, ...] = ('end_user_conditions', 'agent_conditions')
+
+
+def _validate_ticket_form_conditions(key: str, conditions: Any) -> None:
+    """Check the shape of a conditional-field list for a ticket form.
+
+    Each condition is {'parent_field_id': int, 'value': <parent value>,
+    'child_fields': [{'id': int, ...}, ...]}: when the parent field holds the
+    value, the child fields are shown. An empty list is valid and clears the
+    form's conditions."""
+    if not isinstance(conditions, (list, tuple)):
+        raise TypeError(f"{key} must be a list of conditions")
+    for index, condition in enumerate(conditions):
+        where = f"{key}[{index}]"
+        if not isinstance(condition, dict):
+            raise TypeError(f"{where} must be an object")
+        if condition.get('parent_field_id') is None:
+            raise ValueError(f"{where} requires parent_field_id")
+        if 'value' not in condition:
+            raise ValueError(f"{where} requires value")
+        children = condition.get('child_fields')
+        if not isinstance(children, (list, tuple)) or not children:
+            raise ValueError(f"{where} requires a non-empty child_fields list")
+        for child in children:
+            if not isinstance(child, dict) or child.get('id') is None:
+                raise ValueError(f"{where} child_fields entries require id")
+
+
+def _build_ticket_form_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'ticket_form': {...}} envelope, dropping None values. A
+    supplied ticket_field_ids list is ordered and replaces the form's field set.
+    A supplied end_user_conditions or agent_conditions list replaces that
+    condition set."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    field_ids = body.get('ticket_field_ids')
+    if field_ids is not None and not isinstance(field_ids, (list, tuple)):
+        raise TypeError("ticket_field_ids must be a list of field IDs")
+    for key in _TICKET_FORM_CONDITION_KEYS:
+        if key in body:
+            _validate_ticket_form_conditions(key, body[key])
+    return {'ticket_form': body}
+
+
+def _build_macro_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'macro': {...}} envelope, dropping None values. A supplied
+    actions list REPLACES the macro's entire action set (no partial update)."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    actions = body.get('actions')
+    if actions is not None and not isinstance(actions, list):
+        raise TypeError("macro actions must be a list of {field, value} dicts")
+    return {'macro': body}
+
+
+def _build_trigger_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the {'trigger': {...}} envelope, dropping None values. Supplied
+    conditions ({all, any}) and actions (list) REPLACE the existing sets wholesale."""
+    body = {k: v for k, v in fields.items() if v is not None}
+    conditions = body.get('conditions')
+    if conditions is not None and not isinstance(conditions, dict):
+        raise TypeError("trigger conditions must be a dict with 'all' and/or 'any' lists")
+    actions = body.get('actions')
+    if actions is not None and not isinstance(actions, list):
+        raise TypeError("trigger actions must be a list of {field, value} dicts")
+    return {'trigger': body}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -259,6 +361,33 @@ class ZendeskClient:
         """
         url = f"{self.base_url}/{path.lstrip('/')}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url)
+        req.add_header('Authorization', self.auth_header)
+        req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8', errors='replace') if e.fp else "No response body"
+            raise Exception(f"Failed to {error_context}: HTTP {e.code} - {e.reason}. {error_body}")
+
+    def _send_json(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any],
+        *,
+        error_context: str,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        """Authenticated POST/PUT against the Zendesk REST API. Returns decoded JSON.
+
+        Mirrors `_get_json`: HTTP errors re-raise as `Exception` carrying the
+        response body (where Zendesk explains 422 reasons); other exceptions
+        propagate with their original type.
+        """
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method=method)
         req.add_header('Authorization', self.auth_header)
         req.add_header('Content-Type', 'application/json')
         try:
@@ -666,6 +795,26 @@ class ZendeskClient:
         forms = [_project(f, _TICKET_FORM_FIELDS) for f in data.get('ticket_forms', [])]
         return {'count': len(forms), 'ticket_forms': forms}
 
+    def create_ticket_form(self, **fields: Any) -> Dict[str, Any]:
+        """Create a ticket form via POST /api/v2/ticket_forms.json.
+        ticket_field_ids is an ordered list driving field display order."""
+        payload = _build_ticket_form_payload(fields)
+        data = self._send_json(
+            'POST', 'ticket_forms.json', payload, error_context='create ticket form'
+        )
+        return _project(data.get('ticket_form', {}), _TICKET_FORM_FIELDS)
+
+    def update_ticket_form(self, ticket_form_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a ticket form via PUT /api/v2/ticket_forms/{id}.json.
+        A supplied ticket_field_ids list REPLACES the form's field set (send the
+        full ordered list, not just additions)."""
+        payload = _build_ticket_form_payload(fields)
+        data = self._send_json(
+            'PUT', f'ticket_forms/{int(ticket_form_id)}.json', payload,
+            error_context=f'update ticket form {ticket_form_id}',
+        )
+        return _project(data.get('ticket_form', {}), _TICKET_FORM_FIELDS)
+
     def list_ticket_fields(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
         """
         List ticket fields via /api/v2/ticket_fields.json. Each field includes
@@ -692,6 +841,107 @@ class ZendeskClient:
             'has_more': data.get('next_page') is not None or len(fields) == per_page,
             'ticket_fields': fields,
         }
+
+    def create_ticket_field(self, **fields: Any) -> Dict[str, Any]:
+        """Create a ticket field via POST /api/v2/ticket_fields.json.
+        tagger/multiselect require custom_field_options [{name, value}]."""
+        payload = _build_ticket_field_payload(fields)
+        data = self._send_json(
+            'POST', 'ticket_fields.json', payload, error_context='create ticket field'
+        )
+        return _project(data.get('ticket_field', {}), _TICKET_FIELD_FIELDS)
+
+    def update_ticket_field(self, ticket_field_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a ticket field via PUT /api/v2/ticket_fields/{id}.json.
+        A supplied custom_field_options list replaces the existing option set."""
+        payload = _build_ticket_field_payload(fields)
+        data = self._send_json(
+            'PUT', f'ticket_fields/{int(ticket_field_id)}.json', payload,
+            error_context=f'update ticket field {ticket_field_id}',
+        )
+        return _project(data.get('ticket_field', {}), _TICKET_FIELD_FIELDS)
+
+    def list_macros(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """List macros via GET /api/v2/macros.json. Lean projection — call
+        get_macro for a single macro's full actions array."""
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('macros.json', params, error_context='list macros')
+        macros = [_project(m, _MACRO_LIST_FIELDS) for m in data.get('macros', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(macros),
+            'has_more': data.get('next_page') is not None or len(macros) == per_page,
+            'macros': macros,
+        }
+
+    def get_macro(self, macro_id: int) -> Dict[str, Any]:
+        """Get one macro via GET /api/v2/macros/{id}.json, including its full
+        actions array — fetch this before update_macro to edit actions safely."""
+        data = self._get_json(
+            f'macros/{int(macro_id)}.json', {}, error_context=f'get macro {macro_id}'
+        )
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def create_macro(self, **fields: Any) -> Dict[str, Any]:
+        """Create a macro via POST /api/v2/macros.json. Requires title + actions
+        [{field, value}]. Omit restriction for All Agents."""
+        payload = _build_macro_payload(fields)
+        data = self._send_json('POST', 'macros.json', payload, error_context='create macro')
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def update_macro(self, macro_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a macro via PUT /api/v2/macros/{id}.json. A supplied actions
+        list REPLACES all actions — fetch with get_macro, edit, then send the
+        full array."""
+        payload = _build_macro_payload(fields)
+        data = self._send_json(
+            'PUT', f'macros/{int(macro_id)}.json', payload,
+            error_context=f'update macro {macro_id}',
+        )
+        return _project(data.get('macro', {}), _MACRO_FIELDS)
+
+    def list_triggers(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """List triggers via GET /api/v2/triggers.json. Lean projection — call
+        get_trigger for one trigger's full conditions + actions."""
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        data = self._get_json('triggers.json', params, error_context='list triggers')
+        triggers = [_project(t, _TRIGGER_LIST_FIELDS) for t in data.get('triggers', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(triggers),
+            'has_more': data.get('next_page') is not None or len(triggers) == per_page,
+            'triggers': triggers,
+        }
+
+    def get_trigger(self, trigger_id: int) -> Dict[str, Any]:
+        """Get one trigger via GET /api/v2/triggers/{id}.json, including its full
+        conditions + actions — fetch before update_trigger to edit safely."""
+        data = self._get_json(
+            f'triggers/{int(trigger_id)}.json', {}, error_context=f'get trigger {trigger_id}'
+        )
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    def create_trigger(self, **fields: Any) -> Dict[str, Any]:
+        """Create a trigger via POST /api/v2/triggers.json. Requires title,
+        conditions {all, any}, and actions [{field, value}]."""
+        payload = _build_trigger_payload(fields)
+        data = self._send_json('POST', 'triggers.json', payload, error_context='create trigger')
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    def update_trigger(self, trigger_id: int, **fields: Any) -> Dict[str, Any]:
+        """Update a trigger via PUT /api/v2/triggers/{id}.json. Supplied
+        conditions and actions REPLACE the existing sets — fetch with
+        get_trigger, edit, then send the full arrays."""
+        payload = _build_trigger_payload(fields)
+        data = self._send_json(
+            'PUT', f'triggers/{int(trigger_id)}.json', payload,
+            error_context=f'update trigger {trigger_id}',
+        )
+        return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
 
     def get_all_articles(self) -> Dict[str, Any]:
         """

@@ -5,10 +5,19 @@ NOT import zendesk_mcp_server.server — that module constructs a ZendeskClient 
 import time, which needs env vars. The functions under test here are pure:
 no network, no env, no mocks.
 """
+import io
+import json as _json
+import urllib.error
+from contextlib import contextmanager
+
 import pytest
 
 from zendesk_mcp_server.zendesk_client import (
     _SHOW_MANY_MAX_IDS,
+    _build_ticket_field_payload,
+    _build_ticket_form_payload,
+    _build_macro_payload,
+    _build_trigger_payload,
     _coerce_id_list,
     _coerce_pagination,
     _compose_zql,
@@ -16,6 +25,7 @@ from zendesk_mcp_server.zendesk_client import (
     _validate_attachment_url,
     _zql_format_value,
     _zql_separator,
+    ZendeskClient,
 )
 
 
@@ -226,3 +236,218 @@ class TestProject:
 
     def test_empty_fields_yields_empty_dict(self):
         assert _project({"id": 1}, ()) == {}
+
+
+# --- _send_json (POST/PUT transport) -----------------------------------------
+
+def _client():
+    # __init__ does no network — safe to construct with dummy creds.
+    return ZendeskClient(subdomain="testsub", email="a@b.com", token="tok")
+
+
+class TestSendJson:
+    def test_post_sends_method_body_and_auth(self, monkeypatch):
+        captured = {}
+
+        @contextmanager
+        def fake_urlopen(req, timeout=None):
+            captured["method"] = req.get_method()
+            captured["url"] = req.full_url
+            captured["body"] = req.data
+            captured["auth"] = req.get_header("Authorization")
+            yield io.BytesIO(b'{"macro": {"id": 5}}')
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        out = _client()._send_json(
+            "POST", "macros.json", {"macro": {"title": "t"}},
+            error_context="create macro",
+        )
+        assert out == {"macro": {"id": 5}}
+        assert captured["method"] == "POST"
+        assert captured["url"] == "https://testsub.zendesk.com/api/v2/macros.json"
+        assert _json.loads(captured["body"]) == {"macro": {"title": "t"}}
+        assert captured["auth"].startswith("Basic ")
+
+    def test_http_error_surfaces_response_body(self, monkeypatch):
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 422, "Unprocessable Entity", {},
+                io.BytesIO(b'{"description":"Invalid action field"}'),
+            )
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        with pytest.raises(Exception) as ei:
+            _client()._send_json(
+                "PUT", "macros/5.json", {"macro": {}},
+                error_context="update macro 5",
+            )
+        msg = str(ei.value)
+        assert "update macro 5" in msg
+        assert "422" in msg
+        assert "Invalid action field" in msg
+
+
+# --- _build_ticket_field_payload -----------------------------------------
+
+class TestBuildTicketFieldPayload:
+    def test_drops_none_and_wraps(self):
+        out = _build_ticket_field_payload(
+            {"type": "text", "title": "Ship-to Address", "description": None}
+        )
+        assert out == {"ticket_field": {"type": "text", "title": "Ship-to Address"}}
+
+    def test_tagger_requires_options(self):
+        with pytest.raises(ValueError, match="custom_field_options"):
+            _build_ticket_field_payload({"type": "tagger", "title": "Job Type"})
+
+    def test_tagger_with_options_ok(self):
+        out = _build_ticket_field_payload({
+            "type": "multiselect", "title": "HW",
+            "custom_field_options": [{"name": "Laptop", "value": "laptop"}],
+        })
+        assert out["ticket_field"]["type"] == "multiselect"
+
+    def test_bad_type_rejected(self):
+        with pytest.raises(ValueError, match="Unsupported ticket field type"):
+            _build_ticket_field_payload({"type": "lookup", "title": "x"})
+
+    def test_update_without_type_skips_option_check(self):
+        # update may send only mutable fields, no type — must not raise.
+        out = _build_ticket_field_payload({"title": "Renamed"})
+        assert out == {"ticket_field": {"title": "Renamed"}}
+
+    def test_tagger_empty_options_rejected(self):
+        # An empty list is falsy — must be rejected the same as a missing key.
+        with pytest.raises(ValueError, match="custom_field_options"):
+            _build_ticket_field_payload({"type": "tagger", "title": "x", "custom_field_options": []})
+
+
+# --- _build_ticket_form_payload ------------------------------------------
+
+class TestBuildTicketFormPayload:
+    def test_drops_none_and_wraps(self):
+        out = _build_ticket_form_payload(
+            {"name": "Hardware Request", "ticket_field_ids": [1, 2, 3], "default": None}
+        )
+        assert out == {"ticket_form": {"name": "Hardware Request", "ticket_field_ids": [1, 2, 3]}}
+
+    def test_field_ids_must_be_list(self):
+        with pytest.raises(TypeError, match="ticket_field_ids"):
+            _build_ticket_form_payload({"name": "x", "ticket_field_ids": 5})
+
+    def test_update_partial_ok(self):
+        out = _build_ticket_form_payload({"active": False})
+        assert out == {"ticket_form": {"active": False}}
+
+    def test_tuple_field_ids_accepted(self):
+        # tuple is a valid sequence type for ticket_field_ids.
+        out = _build_ticket_form_payload({"ticket_field_ids": (1, 2)})
+        assert out == {"ticket_form": {"ticket_field_ids": (1, 2)}}
+
+    def test_end_user_conditions_pass_through(self):
+        conditions = [
+            {"parent_field_id": 10, "value": "someone_else", "child_fields": [{"id": 11, "is_required": True}]}
+        ]
+        out = _build_ticket_form_payload({"end_user_conditions": conditions})
+        assert out == {"ticket_form": {"end_user_conditions": conditions}}
+
+    def test_agent_conditions_pass_through(self):
+        conditions = [
+            {
+                "parent_field_id": 10,
+                "value": True,
+                "child_fields": [
+                    {"id": 11, "is_required": False, "required_on_statuses": {"type": "NO_STATUSES"}}
+                ],
+            }
+        ]
+        out = _build_ticket_form_payload({"agent_conditions": conditions})
+        assert out == {"ticket_form": {"agent_conditions": conditions}}
+
+    def test_empty_conditions_kept_to_clear(self):
+        # An empty list is the way to remove every condition, so it must be sent.
+        out = _build_ticket_form_payload({"end_user_conditions": []})
+        assert out == {"ticket_form": {"end_user_conditions": []}}
+
+    def test_conditions_must_be_list(self):
+        with pytest.raises(TypeError, match="end_user_conditions"):
+            _build_ticket_form_payload({"end_user_conditions": {"parent_field_id": 1}})
+
+    def test_condition_requires_parent_field_id(self):
+        with pytest.raises(ValueError, match="parent_field_id"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"value": "x", "child_fields": [{"id": 2}]}]}
+            )
+
+    def test_condition_requires_value(self):
+        with pytest.raises(ValueError, match="requires value"):
+            _build_ticket_form_payload(
+                {"agent_conditions": [{"parent_field_id": 1, "child_fields": [{"id": 2}]}]}
+            )
+
+    def test_condition_false_value_accepted(self):
+        # A checkbox parent uses the literal False as its condition value.
+        conditions = [{"parent_field_id": 1, "value": False, "child_fields": [{"id": 2}]}]
+        out = _build_ticket_form_payload({"end_user_conditions": conditions})
+        assert out["ticket_form"]["end_user_conditions"] == conditions
+
+    def test_condition_requires_child_fields(self):
+        with pytest.raises(ValueError, match="child_fields"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"parent_field_id": 1, "value": "x", "child_fields": []}]}
+            )
+
+    def test_condition_child_requires_id(self):
+        with pytest.raises(ValueError, match="require id"):
+            _build_ticket_form_payload(
+                {"end_user_conditions": [{"parent_field_id": 1, "value": "x", "child_fields": [{"is_required": True}]}]}
+            )
+
+
+# --- _build_macro_payload ---------------------------------------------------
+
+class TestBuildMacroPayload:
+    def test_wraps_and_drops_none(self):
+        out = _build_macro_payload({
+            "title": "Intake",
+            "actions": [{"field": "status", "value": "pending"}],
+            "restriction": None,
+        })
+        assert out == {"macro": {
+            "title": "Intake",
+            "actions": [{"field": "status", "value": "pending"}],
+        }}
+
+    def test_actions_must_be_list(self):
+        with pytest.raises(TypeError, match="actions"):
+            _build_macro_payload({"title": "x", "actions": {"field": "status"}})
+
+    def test_update_partial_ok(self):
+        out = _build_macro_payload({"active": False})
+        assert out == {"macro": {"active": False}}
+
+
+# --- _build_trigger_payload -------------------------------------------------
+
+class TestBuildTriggerPayload:
+    def test_wraps_and_drops_none(self):
+        out = _build_trigger_payload({
+            "title": "Email -> Hardware",
+            "conditions": {"all": [{"field": "status", "operator": "is", "value": "new"}], "any": []},
+            "actions": [{"field": "group_id", "value": "21014104298395"}],
+            "category_id": None,
+        })
+        assert out["trigger"]["title"] == "Email -> Hardware"
+        assert "category_id" not in out["trigger"]
+
+    def test_conditions_must_be_dict(self):
+        with pytest.raises(TypeError, match="conditions"):
+            _build_trigger_payload({"title": "x", "conditions": [], "actions": []})
+
+    def test_actions_must_be_list(self):
+        with pytest.raises(TypeError, match="actions"):
+            _build_trigger_payload({"title": "x", "actions": {"field": "group_id"}})
+
+    def test_update_partial_ok(self):
+        out = _build_trigger_payload({"active": False})
+        assert out == {"trigger": {"active": False}}
