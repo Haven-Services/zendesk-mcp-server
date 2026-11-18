@@ -107,16 +107,20 @@ def _project(record: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
 def _build_ticket_field_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     """Build the {'ticket_field': {...}} envelope, dropping None values so the
     same builder serves create and update. Validates the type enum and that
-    tagger/multiselect fields carry non-empty custom_field_options."""
+    supplied custom_field_options are non-empty."""
     body = {k: v for k, v in fields.items() if v is not None}
     ftype = body.get('type')
     if ftype is not None and ftype not in _TICKET_FIELD_TYPES:
         raise ValueError(
             f"Unsupported ticket field type {ftype!r}; one of {sorted(_TICKET_FIELD_TYPES)}"
         )
-    if ftype in _OPTION_REQUIRED_FIELD_TYPES and not body.get('custom_field_options'):
+    options_required = (
+        ftype in _OPTION_REQUIRED_FIELD_TYPES or 'custom_field_options' in body
+    )
+    if options_required and not body.get('custom_field_options'):
         raise ValueError(
-            f"ticket field type {ftype!r} requires non-empty custom_field_options"
+            "custom_field_options must be non-empty when supplied or required "
+            "by the ticket field type"
         )
     return {'ticket_field': body}
 

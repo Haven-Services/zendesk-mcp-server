@@ -321,6 +321,12 @@ class TestBuildTicketFieldPayload:
         with pytest.raises(ValueError, match="custom_field_options"):
             _build_ticket_field_payload({"type": "tagger", "title": "x", "custom_field_options": []})
 
+    def test_update_empty_options_without_type_rejected(self):
+        # Updates normally omit type, but an options array still replaces the
+        # complete live option set and must not be allowed to erase it.
+        with pytest.raises(ValueError, match="custom_field_options"):
+            _build_ticket_field_payload({"custom_field_options": []})
+
 
 # --- _build_ticket_form_payload ------------------------------------------
 

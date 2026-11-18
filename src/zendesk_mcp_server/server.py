@@ -489,7 +489,8 @@ async def handle_list_tools() -> list[types.Tool]:
             name="update_ticket_field",
             description=(
                 "Update a custom ticket field by id. A supplied custom_field_options "
-                "list REPLACES the field's option set. Writes live to production."
+                "list must be non-empty and REPLACES the field's option set. "
+                "Writes live to production."
             ),
             inputSchema={
                 "type": "object",
@@ -503,7 +504,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "required_in_portal": {"type": "boolean"},
                     "required": {"type": "boolean"},
                     "active": {"type": "boolean"},
-                    "custom_field_options": {"type": "array", "items": {"type": "object"}},
+                    "custom_field_options": {"type": "array", "minItems": 1, "items": {"type": "object"}},
                 },
                 "required": ["ticket_field_id"],
             }
