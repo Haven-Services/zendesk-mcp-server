@@ -698,6 +698,24 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="set_ticket_draft_reply",
+            description=(
+                "Store a reply draft on a ticket for an agent to review. Writes ONLY the agent-only "
+                "'AI draft reply' ticket field: no comment is added, nothing is sent to the requester, "
+                "and status and assignee are untouched. The agent applies the macro 'Insert AI draft "
+                "reply' to put the text in the reply box, edits it and submits. Plain text with line "
+                "breaks; an empty string clears the draft."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticket_id": {"type": "integer"},
+                    "draft": {"type": "string", "description": "Plain-text reply draft (max 8000 characters)"},
+                },
+                "required": ["ticket_id", "draft"],
+            }
+        ),
+        types.Tool(
             name="list_help_center_sections",
             description="List Help Center sections with their category names. A section id is needed to create an article draft.",
             inputSchema={"type": "object", "properties": {}, "required": []}
@@ -1059,6 +1077,12 @@ async def handle_call_tool(
             trigger_id = arguments.pop("trigger_id")
             result = zendesk_client.update_trigger(int(trigger_id), **arguments)
             return [types.TextContent(type="text", text=json.dumps({"message": "Trigger updated", "trigger": result}, indent=2))]
+
+        elif name == "set_ticket_draft_reply":
+            if not arguments or arguments.get("ticket_id") is None or "draft" not in arguments:
+                raise ValueError("ticket_id and draft are required")
+            result = zendesk_client.set_ticket_draft_reply(int(arguments["ticket_id"]), arguments["draft"])
+            return [types.TextContent(type="text", text=json.dumps({"message": "Draft reply stored (not sent)", "result": result}, indent=2))]
 
         elif name == "list_help_center_sections":
             result = zendesk_client.list_help_center_sections()
