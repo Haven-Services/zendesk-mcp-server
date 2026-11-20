@@ -720,7 +720,7 @@ async def handle_list_tools() -> list[types.Tool]:
             description=(
                 "Store triage notes on a ticket for agents. Writes ONLY the agent-only 'AI triage "
                 "notes' ticket field, as one JSON object: no comment is added, nothing is sent to the "
-                "requester, and status and assignee are untouched. The 'Triage drafts' sidebar app "
+                "requester, and status and assignee are untouched. The 'Ticket Assist' sidebar app "
                 "shows the notes."
             ),
             inputSchema={
