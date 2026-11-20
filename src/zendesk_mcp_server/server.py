@@ -696,6 +696,92 @@ async def handle_list_tools() -> list[types.Tool]:
                 },
                 "required": ["trigger_id"],
             }
+        ),
+        types.Tool(
+            name="list_help_center_sections",
+            description="List Help Center sections with their category names. A section id is needed to create an article draft.",
+            inputSchema={"type": "object", "properties": {}, "required": []}
+        ),
+        types.Tool(
+            name="list_help_center_user_segments",
+            description=(
+                "List Help Center user segments — the audience an article is visible to once a "
+                "human publishes it (user_type staff = agents and admins; signed_in_users = any signed-in user)."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []}
+        ),
+        types.Tool(
+            name="list_help_center_permission_groups",
+            description="List Help Center permission groups (who may edit and publish an article).",
+            inputSchema={"type": "object", "properties": {}, "required": []}
+        ),
+        types.Tool(
+            name="list_help_center_articles",
+            description=(
+                "List Help Center articles, drafts included (lean projection, no body; each row carries "
+                "its draft flag). Filter by section_id and/or label_names (all labels must match). "
+                "Call get_help_center_article for the HTML body."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "section_id": {"type": "integer"},
+                    "label_names": {"type": "array", "items": {"type": "string"}},
+                    "page": {"type": "integer", "default": 1},
+                    "per_page": {"type": "integer", "default": 100},
+                },
+                "required": [],
+            }
+        ),
+        types.Tool(
+            name="get_help_center_article",
+            description="Get one Help Center article by id, including its HTML body and draft flag.",
+            inputSchema={
+                "type": "object",
+                "properties": {"article_id": {"type": "integer"}},
+                "required": ["article_id"],
+            }
+        ),
+        types.Tool(
+            name="create_help_center_article_draft",
+            description=(
+                "Create a Help Center article as a DRAFT. A draft is not shown in the help center; "
+                "a person reviews and publishes it in Zendesk Guide. This server cannot publish: "
+                "draft is always true, subscribers are never notified, and a draft argument is rejected. "
+                "Requires section_id, title, body (HTML), user_segment_id (the audience after "
+                "publishing; 'everyone' is not accepted) and permission_group_id."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "section_id": {"type": "integer", "description": "From list_help_center_sections"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string", "description": "Article body as an HTML fragment"},
+                    "user_segment_id": {"type": "integer", "description": "From list_help_center_user_segments"},
+                    "permission_group_id": {"type": "integer", "description": "From list_help_center_permission_groups"},
+                    "locale": {"type": "string", "default": "en-us"},
+                    "label_names": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["section_id", "title", "body", "user_segment_id", "permission_group_id"],
+            }
+        ),
+        types.Tool(
+            name="update_help_center_article_draft",
+            description=(
+                "Edit the title, body (HTML) and/or labels of an article that is still a DRAFT. "
+                "Refuses a published article — those are edited in Zendesk Guide. Cannot publish. "
+                "A supplied label_names list replaces the article's labels."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "article_id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "label_names": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["article_id"],
+            }
         )
     ]
 
@@ -973,6 +1059,48 @@ async def handle_call_tool(
             trigger_id = arguments.pop("trigger_id")
             result = zendesk_client.update_trigger(int(trigger_id), **arguments)
             return [types.TextContent(type="text", text=json.dumps({"message": "Trigger updated", "trigger": result}, indent=2))]
+
+        elif name == "list_help_center_sections":
+            result = zendesk_client.list_help_center_sections()
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "list_help_center_user_segments":
+            result = zendesk_client.list_help_center_user_segments()
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "list_help_center_permission_groups":
+            result = zendesk_client.list_help_center_permission_groups()
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "list_help_center_articles":
+            args = arguments or {}
+            result = zendesk_client.list_help_center_articles(
+                section_id=args.get("section_id"),
+                label_names=args.get("label_names"),
+                page=args.get("page", 1),
+                per_page=args.get("per_page", 100),
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "get_help_center_article":
+            if not arguments or arguments.get("article_id") is None:
+                raise ValueError("article_id is required")
+            result = zendesk_client.get_help_center_article(int(arguments["article_id"]))
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "create_help_center_article_draft":
+            if not arguments or arguments.get("section_id") is None:
+                raise ValueError("section_id is required")
+            section_id = arguments.pop("section_id")
+            result = zendesk_client.create_help_center_article_draft(int(section_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Article draft created (not published)", "article": result}, indent=2))]
+
+        elif name == "update_help_center_article_draft":
+            if not arguments or arguments.get("article_id") is None:
+                raise ValueError("article_id is required")
+            article_id = arguments.pop("article_id")
+            result = zendesk_client.update_help_center_article_draft(int(article_id), **arguments)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Article draft updated (still a draft)", "article": result}, indent=2))]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
