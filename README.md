@@ -162,6 +162,16 @@ Update fields on an existing Zendesk ticket (e.g., status, priority, assignee, g
   - `custom_fields` (array[object], optional)
   - `due_at` (string, optional): ISO8601 datetime
 
+### set_ticket_draft_reply
+
+Store a reply draft on a ticket for an agent to review. Writes only the agent-only multi-line ticket field titled
+`AI draft reply`; it adds no comment, sends nothing to the requester and leaves status and assignee alone. A macro
+whose comment is `{{ticket.ticket_field_<id> | newline_to_br}}` puts the draft in the reply box.
+
+- Input:
+  - `ticket_id` (integer)
+  - `draft` (string): plain text, at most 8000 characters; an empty string clears the draft
+
 ### Help Center article drafts
 
 Read the Help Center and stage articles for review. The server creates and edits **drafts only**: a draft is not

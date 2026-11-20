@@ -77,6 +77,10 @@ _TICKET_FIELD_TYPES = frozenset({
 })
 _OPTION_REQUIRED_FIELD_TYPES = frozenset({'tagger', 'multiselect'})
 
+# The agent-only multi-line ticket field that holds a reply drafted for review.
+_DRAFT_REPLY_FIELD_TITLE = 'AI draft reply'
+_DRAFT_REPLY_MAX_CHARS = 8000
+
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
 
@@ -245,6 +249,31 @@ def _build_article_translation_payload(fields: Dict[str, Any]) -> Dict[str, Any]
             raise ValueError(f"{key} must be a non-empty string")
     body['draft'] = True
     return {'translation': body}
+
+
+def _find_draft_reply_field(ticket_fields: List[Dict[str, Any]], title: str) -> int:
+    """Return the id of the one active textarea ticket field titled `title`.
+    Raises when it is missing or ambiguous, so a draft is never written to a
+    field picked by guesswork."""
+    matches = [
+        f for f in ticket_fields
+        if f.get('title') == title and f.get('type') == 'textarea' and f.get('active')
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected exactly one active textarea ticket field titled {title!r}, found {len(matches)}"
+        )
+    return int(matches[0]['id'])
+
+
+def _build_draft_reply_payload(field_id: int, draft: Any) -> Dict[str, Any]:
+    """Build a ticket update that touches ONLY the draft-reply field: no comment,
+    no status, no assignee. An empty string clears the draft."""
+    if not isinstance(draft, str):
+        raise TypeError("draft must be a string (empty to clear)")
+    if len(draft) > _DRAFT_REPLY_MAX_CHARS:
+        raise ValueError(f"draft is {len(draft)} characters; the limit is {_DRAFT_REPLY_MAX_CHARS}")
+    return {'ticket': {'custom_fields': [{'id': int(field_id), 'value': draft}]}}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -1002,6 +1031,38 @@ class ZendeskClient:
             error_context=f'update trigger {trigger_id}',
         )
         return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    def set_ticket_draft_reply(
+        self, ticket_id: int, draft: str, field_title: str = _DRAFT_REPLY_FIELD_TITLE,
+    ) -> Dict[str, Any]:
+        """Store a reply draft on a ticket for an agent to review, via
+        PUT /api/v2/tickets/{id}.json with the draft-reply custom field only.
+        Adds no comment and sends nothing to the requester; an agent inserts the
+        draft into the reply box with a macro and submits it."""
+        fields: List[Dict[str, Any]] = []
+        page = 1
+        while True:
+            data = self._get_json(
+                'ticket_fields.json', {'page': str(page), 'per_page': '100'},
+                error_context='list ticket fields',
+            )
+            fields.extend(data.get('ticket_fields', []))
+            if not data.get('next_page') or page >= 10:
+                break
+            page += 1
+        field_id = _find_draft_reply_field(fields, field_title)
+        payload = _build_draft_reply_payload(field_id, draft)
+        data = self._send_json(
+            'PUT', f'tickets/{int(ticket_id)}.json', payload,
+            error_context=f'set draft reply on ticket {ticket_id}',
+        )
+        ticket = data.get('ticket', {})
+        return {
+            'ticket_id': ticket.get('id'),
+            'status': ticket.get('status'),
+            'field_id': field_id,
+            'draft_chars': len(draft),
+        }
 
     # --- Help Center (Guide) ---------------------------------------------------
 
