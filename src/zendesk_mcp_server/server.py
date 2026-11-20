@@ -520,7 +520,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "description": "Ordered field ids"},
+                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "description": "Ordered field ids"},
                     "display_name": {"type": "string"},
                     "active": {"type": "boolean"},
                     "end_user_visible": {"type": "boolean"},
@@ -554,7 +554,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "ticket_form_id": {"type": "integer"},
                     "name": {"type": "string"},
-                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "description": "Full ordered field-id list (replaces existing)"},
+                    "ticket_field_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "description": "Full ordered field-id list (replaces existing; cannot be empty)"},
                     "display_name": {"type": "string"},
                     "active": {"type": "boolean"},
                     "end_user_visible": {"type": "boolean"},
@@ -609,7 +609,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "[{field, value}]"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "minItems": 1, "description": "[{field, value}]"},
                     "restriction": {"type": "object", "description": "Omit=All Agents; {type:'Group'|'User', id|ids}"},
                     "description": {"type": "string"},
                     "active": {"type": "boolean"},
@@ -629,7 +629,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "macro_id": {"type": "integer"},
                     "title": {"type": "string"},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "Full action array (replaces existing)"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "minItems": 1, "description": "Full action array (replaces existing; cannot be empty)"},
                     "restriction": {"type": "object"},
                     "active": {"type": "boolean"},
                 },
@@ -668,7 +668,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "title": {"type": "string"},
                     "conditions": {"type": "object", "description": "{all:[{field,operator,value}], any:[...]}"},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "[{field, value}]"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "minItems": 1, "description": "[{field, value}]"},
                     "active": {"type": "boolean"},
                     "category_id": {"type": "string"},
                     "position": {"type": "integer"},
@@ -679,9 +679,9 @@ async def handle_list_tools() -> list[types.Tool]:
         types.Tool(
             name="update_trigger",
             description=(
-                "Update a trigger by id. Supplied conditions and actions REPLACE the "
-                "existing sets (no partial update). Call get_trigger, edit, then send "
-                "the full arrays. Writes live to production."
+                "Update a trigger by id. If changing conditions or actions, BOTH must "
+                "be supplied because Zendesk replaces both sets together. Call "
+                "get_trigger, edit, then send both complete sets. Writes live to production."
             ),
             inputSchema={
                 "type": "object",
@@ -689,7 +689,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "trigger_id": {"type": "integer"},
                     "title": {"type": "string"},
                     "conditions": {"type": "object", "description": "Full conditions object (replaces existing)"},
-                    "actions": {"type": "array", "items": {"type": "object"}, "description": "Full action array (replaces existing)"},
+                    "actions": {"type": "array", "items": {"type": "object"}, "minItems": 1, "description": "Full action array (required with conditions; replaces existing)"},
                     "active": {"type": "boolean"},
                     "category_id": {"type": "string"},
                     "position": {"type": "integer"},

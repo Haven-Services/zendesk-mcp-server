@@ -158,6 +158,8 @@ def _build_ticket_form_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     field_ids = body.get('ticket_field_ids')
     if field_ids is not None and not isinstance(field_ids, (list, tuple)):
         raise TypeError("ticket_field_ids must be a list of field IDs")
+    if field_ids is not None and not field_ids:
+        raise ValueError("ticket_field_ids must contain at least one field ID")
     for key in _TICKET_FORM_CONDITION_KEYS:
         if key in body:
             _validate_ticket_form_conditions(key, body[key])
@@ -171,6 +173,8 @@ def _build_macro_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     actions = body.get('actions')
     if actions is not None and not isinstance(actions, list):
         raise TypeError("macro actions must be a list of {field, value} dicts")
+    if actions is not None and not actions:
+        raise ValueError("macro actions must contain at least one action")
     return {'macro': body}
 
 
@@ -184,6 +188,13 @@ def _build_trigger_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     actions = body.get('actions')
     if actions is not None and not isinstance(actions, list):
         raise TypeError("trigger actions must be a list of {field, value} dicts")
+    if actions is not None and not actions:
+        raise ValueError("trigger actions must contain at least one action")
+    if ('conditions' in body) != ('actions' in body):
+        raise ValueError(
+            "trigger conditions and actions must be supplied together because "
+            "Zendesk replaces both arrays when either one is updated"
+        )
     return {'trigger': body}
 
 

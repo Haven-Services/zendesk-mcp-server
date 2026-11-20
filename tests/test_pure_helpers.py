@@ -335,6 +335,10 @@ class TestBuildTicketFormPayload:
         with pytest.raises(TypeError, match="ticket_field_ids"):
             _build_ticket_form_payload({"name": "x", "ticket_field_ids": 5})
 
+    def test_field_ids_must_not_be_empty(self):
+        with pytest.raises(ValueError, match="ticket_field_ids"):
+            _build_ticket_form_payload({"ticket_field_ids": []})
+
     def test_update_partial_ok(self):
         out = _build_ticket_form_payload({"active": False})
         assert out == {"ticket_form": {"active": False}}
@@ -422,6 +426,10 @@ class TestBuildMacroPayload:
         with pytest.raises(TypeError, match="actions"):
             _build_macro_payload({"title": "x", "actions": {"field": "status"}})
 
+    def test_actions_must_not_be_empty(self):
+        with pytest.raises(ValueError, match="actions"):
+            _build_macro_payload({"actions": []})
+
     def test_update_partial_ok(self):
         out = _build_macro_payload({"active": False})
         assert out == {"macro": {"active": False}}
@@ -447,6 +455,21 @@ class TestBuildTriggerPayload:
     def test_actions_must_be_list(self):
         with pytest.raises(TypeError, match="actions"):
             _build_trigger_payload({"title": "x", "actions": {"field": "group_id"}})
+
+    def test_actions_must_not_be_empty(self):
+        with pytest.raises(ValueError, match="actions"):
+            _build_trigger_payload({"conditions": {"all": [], "any": []}, "actions": []})
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"conditions": {"all": [], "any": []}},
+            {"actions": [{"field": "status", "value": "open"}]},
+        ],
+    )
+    def test_conditions_and_actions_must_be_updated_together(self, fields):
+        with pytest.raises(ValueError, match="supplied together"):
+            _build_trigger_payload(fields)
 
     def test_update_partial_ok(self):
         out = _build_trigger_payload({"active": False})
