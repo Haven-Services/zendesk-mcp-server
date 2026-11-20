@@ -60,6 +60,17 @@ _TRIGGER_LIST_FIELDS: Tuple[str, ...] = (
     'id', 'title', 'active', 'category_id', 'created_at', 'updated_at',
 )  # no 'conditions', no 'actions' — call get_trigger for the full sets
 
+_HC_SECTION_FIELDS: Tuple[str, ...] = (
+    'id', 'name', 'description', 'category_id', 'locale', 'html_url',
+)
+_HC_USER_SEGMENT_FIELDS: Tuple[str, ...] = ('id', 'name', 'user_type', 'built_in')
+_HC_PERMISSION_GROUP_FIELDS: Tuple[str, ...] = ('id', 'name', 'built_in')
+_HC_ARTICLE_LIST_FIELDS: Tuple[str, ...] = (
+    'id', 'title', 'draft', 'section_id', 'user_segment_id', 'permission_group_id',
+    'label_names', 'locale', 'html_url', 'created_at', 'updated_at',
+)  # no 'body' — call get_help_center_article for the full HTML
+_HC_ARTICLE_FIELDS: Tuple[str, ...] = _HC_ARTICLE_LIST_FIELDS + ('body',)
+
 _TICKET_FIELD_TYPES = frozenset({
     'text', 'textarea', 'checkbox', 'date', 'integer', 'decimal',
     'regexp', 'multiselect', 'tagger',
@@ -185,6 +196,55 @@ def _build_trigger_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
     if actions is not None and not isinstance(actions, list):
         raise TypeError("trigger actions must be a list of {field, value} dicts")
     return {'trigger': body}
+
+
+def _build_article_draft_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the create-article body for a DRAFT. `draft` is always True and
+    `notify_subscribers` always False, whatever the caller sent: this server has
+    no way to publish. A caller-supplied `draft` is rejected rather than
+    silently overridden, so a request to publish fails loudly. The audience is
+    an explicit user segment; "everyone" (a null user_segment_id) is refused."""
+    if 'draft' in fields:
+        raise ValueError(
+            "draft cannot be set: articles are always created as drafts; publish in Zendesk Guide"
+        )
+    body = {k: v for k, v in fields.items() if v is not None}
+    for key in ('title', 'body'):
+        if not isinstance(body.get(key), str) or not body[key].strip():
+            raise ValueError(f"{key} is required and must be a non-empty string")
+    for key in ('user_segment_id', 'permission_group_id'):
+        value = body.get(key)
+        if isinstance(value, bool) or value is None:
+            raise ValueError(
+                f"{key} is required: pick an id from list_help_center_"
+                f"{'user_segments' if key == 'user_segment_id' else 'permission_groups'}"
+            )
+        body[key] = int(value)
+    labels = body.get('label_names')
+    if labels is not None and not (
+        isinstance(labels, list) and all(isinstance(x, str) for x in labels)
+    ):
+        raise TypeError("label_names must be a list of strings")
+    body.setdefault('locale', 'en-us')
+    body['draft'] = True
+    return {'article': body, 'notify_subscribers': False}
+
+
+def _build_article_translation_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the update-translation body for a draft article: title and/or body,
+    and always `draft: True` so the write can never publish."""
+    if 'draft' in fields:
+        raise ValueError(
+            "draft cannot be set: this server only edits drafts; publish in Zendesk Guide"
+        )
+    body = {k: v for k, v in fields.items() if k in ('title', 'body') and v is not None}
+    if not body:
+        raise ValueError("nothing to update: give title and/or body")
+    for key, value in body.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} must be a non-empty string")
+    body['draft'] = True
+    return {'translation': body}
 
 
 def _zql_format_value(v: Any) -> str:
@@ -942,6 +1002,142 @@ class ZendeskClient:
             error_context=f'update trigger {trigger_id}',
         )
         return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
+
+    # --- Help Center (Guide) ---------------------------------------------------
+
+    def list_help_center_sections(self) -> Dict[str, Any]:
+        """List Help Center sections with their category names, via
+        GET /api/v2/help_center/sections and /categories."""
+        params = {'per_page': '100'}
+        sections = self._get_json(
+            'help_center/sections', params, error_context='list help center sections'
+        ).get('sections', [])
+        categories = self._get_json(
+            'help_center/categories', params, error_context='list help center categories'
+        ).get('categories', [])
+        names = {c.get('id'): c.get('name') for c in categories}
+        rows = []
+        for section in sections:
+            row = _project(section, _HC_SECTION_FIELDS)
+            row['category_name'] = names.get(section.get('category_id'))
+            rows.append(row)
+        return {'count': len(rows), 'sections': rows}
+
+    def list_help_center_user_segments(self) -> Dict[str, Any]:
+        """List user segments (an article's audience) via
+        GET /api/v2/help_center/user_segments."""
+        data = self._get_json(
+            'help_center/user_segments', {'per_page': '100'},
+            error_context='list help center user segments',
+        )
+        rows = [_project(r, _HC_USER_SEGMENT_FIELDS) for r in data.get('user_segments', [])]
+        return {'count': len(rows), 'user_segments': rows}
+
+    def list_help_center_permission_groups(self) -> Dict[str, Any]:
+        """List permission groups (who may edit and publish) via
+        GET /api/v2/guide/permission_groups.json."""
+        data = self._get_json(
+            'guide/permission_groups.json', {'per_page': '100'},
+            error_context='list help center permission groups',
+        )
+        rows = [
+            _project(r, _HC_PERMISSION_GROUP_FIELDS) for r in data.get('permission_groups', [])
+        ]
+        return {'count': len(rows), 'permission_groups': rows}
+
+    def list_help_center_articles(
+        self,
+        section_id: Any = None,
+        label_names: Any = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> Dict[str, Any]:
+        """List articles, drafts included (lean projection, no body), via
+        GET /api/v2/help_center/articles or /sections/{id}/articles.
+        `label_names` returns only articles carrying all of the labels."""
+        page, per_page = _coerce_pagination(page, per_page, default_per_page=100)
+        params = {'page': str(page), 'per_page': str(per_page)}
+        if label_names:
+            if isinstance(label_names, str):
+                label_names = [label_names]
+            params['label_names'] = ','.join(str(x) for x in label_names)
+        path = 'help_center/articles'
+        if section_id is not None:
+            path = f'help_center/sections/{int(section_id)}/articles'
+        data = self._get_json(path, params, error_context='list help center articles')
+        rows = [_project(a, _HC_ARTICLE_LIST_FIELDS) for a in data.get('articles', [])]
+        return {
+            'page': page,
+            'per_page': per_page,
+            'count': len(rows),
+            'has_more': data.get('next_page') is not None,
+            'articles': rows,
+        }
+
+    def get_help_center_article(self, article_id: int) -> Dict[str, Any]:
+        """Get one article including its HTML body via
+        GET /api/v2/help_center/articles/{id}."""
+        data = self._get_json(
+            f'help_center/articles/{int(article_id)}', {},
+            error_context=f'get help center article {article_id}',
+        )
+        return _project(data.get('article', {}), _HC_ARTICLE_FIELDS)
+
+    def create_help_center_article_draft(self, section_id: int, **fields: Any) -> Dict[str, Any]:
+        """Create an article as a DRAFT via
+        POST /api/v2/help_center/sections/{section_id}/articles. The payload
+        builder forces draft=True and notify_subscribers=False."""
+        payload = _build_article_draft_payload(fields)
+        data = self._send_json(
+            'POST', f'help_center/sections/{int(section_id)}/articles', payload,
+            error_context='create help center article draft',
+        )
+        return _project(data.get('article', {}), _HC_ARTICLE_FIELDS)
+
+    def update_help_center_article_draft(
+        self,
+        article_id: int,
+        title: Any = None,
+        body: Any = None,
+        label_names: Any = None,
+        **rest: Any,
+    ) -> Dict[str, Any]:
+        """Edit an article that is still a draft. Refuses a published article.
+        Title and body go through PUT .../articles/{id}/translations/{locale}
+        (always with draft=True); labels through PUT .../articles/{id}."""
+        if rest:
+            raise ValueError(
+                f"unsupported field(s) {sorted(rest)}: only title, body and label_names can be changed"
+            )
+        article_id = int(article_id)
+        current = self._get_json(
+            f'help_center/articles/{article_id}', {},
+            error_context=f'get help center article {article_id}',
+        ).get('article', {})
+        if current.get('draft') is not True:
+            raise ValueError(
+                f"article {article_id} is not a draft: published articles are edited in Zendesk Guide"
+            )
+        if title is None and body is None and label_names is None:
+            raise ValueError("nothing to update: give title, body and/or label_names")
+        if label_names is not None and not (
+            isinstance(label_names, list) and all(isinstance(x, str) for x in label_names)
+        ):
+            raise TypeError("label_names must be a list of strings")
+        if title is not None or body is not None:
+            payload = _build_article_translation_payload({'title': title, 'body': body})
+            locale = urllib.parse.quote(str(current.get('locale') or 'en-us'), safe='')
+            self._send_json(
+                'PUT', f'help_center/articles/{article_id}/translations/{locale}', payload,
+                error_context=f'update help center article draft {article_id}',
+            )
+        if label_names is not None:
+            self._send_json(
+                'PUT', f'help_center/articles/{article_id}',
+                {'article': {'label_names': label_names}},
+                error_context=f'update labels on help center article {article_id}',
+            )
+        return self.get_help_center_article(article_id)
 
     def get_all_articles(self) -> Dict[str, Any]:
         """

@@ -161,3 +161,32 @@ Update fields on an existing Zendesk ticket (e.g., status, priority, assignee, g
   - `tags` (array[string], optional)
   - `custom_fields` (array[object], optional)
   - `due_at` (string, optional): ISO8601 datetime
+
+### Help Center article drafts
+
+Read the Help Center and stage articles for review. The server creates and edits **drafts only**: a draft is not
+shown in the help center, and publishing is done by a person in Zendesk Guide. There is no publish or delete tool.
+
+- `list_help_center_sections`: sections with their category names
+- `list_help_center_user_segments`: audiences (`staff` = agents and admins, `signed_in_users` = any signed-in user)
+- `list_help_center_permission_groups`: who may edit and publish
+- `list_help_center_articles`: articles, drafts included, without bodies
+  - `section_id` (integer, optional)
+  - `label_names` (array[string], optional): only articles carrying all of the labels
+  - `page`, `per_page` (integer, optional)
+- `get_help_center_article`: one article with its HTML body
+  - `article_id` (integer)
+- `create_help_center_article_draft`: create an article as a draft; `draft` is always true, subscribers are never
+  notified, and a `draft` argument is rejected
+  - `section_id` (integer)
+  - `title` (string)
+  - `body` (string): HTML fragment
+  - `user_segment_id` (integer): the audience once published; "everyone" is not accepted
+  - `permission_group_id` (integer)
+  - `locale` (string, optional): defaults to `en-us`
+  - `label_names` (array[string], optional)
+- `update_help_center_article_draft`: change the title, body or labels of an article that is still a draft; a
+  published article is refused
+  - `article_id` (integer)
+  - `title`, `body` (string, optional)
+  - `label_names` (array[string], optional): replaces the article's labels
