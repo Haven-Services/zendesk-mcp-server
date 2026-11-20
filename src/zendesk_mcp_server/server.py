@@ -716,6 +716,27 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="set_ticket_triage_notes",
+            description=(
+                "Store triage notes on a ticket for agents. Writes ONLY the agent-only 'AI triage "
+                "notes' ticket field, as one JSON object: no comment is added, nothing is sent to the "
+                "requester, and status and assignee are untouched. The 'Triage drafts' sidebar app "
+                "shows the notes."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticket_id": {"type": "integer"},
+                    "kind": {"type": "string", "enum": ["request", "incident", "security", "vendor", "noise"]},
+                    "note": {"type": "string", "description": "Plain-text internal note: what applies, first checks, the open question (max 4000 characters)"},
+                    "runbook": {"type": "string", "description": "Path or title of the matching runbook (max 200 characters)"},
+                    "repeat": {"type": "integer", "minimum": 0, "description": "Similar tickets in the past month"},
+                    "generated": {"type": "string", "description": "Date written, YYYY-MM-DD"},
+                },
+                "required": ["ticket_id", "kind", "note"],
+            }
+        ),
+        types.Tool(
             name="list_help_center_sections",
             description="List Help Center sections with their category names. A section id is needed to create an article draft.",
             inputSchema={"type": "object", "properties": {}, "required": []}
@@ -1083,6 +1104,17 @@ async def handle_call_tool(
                 raise ValueError("ticket_id and draft are required")
             result = zendesk_client.set_ticket_draft_reply(int(arguments["ticket_id"]), arguments["draft"])
             return [types.TextContent(type="text", text=json.dumps({"message": "Draft reply stored (not sent)", "result": result}, indent=2))]
+
+        elif name == "set_ticket_triage_notes":
+            if not arguments or arguments.get("ticket_id") is None:
+                raise ValueError("ticket_id is required")
+            ticket_id = arguments.pop("ticket_id")
+            allowed = {k: arguments[k] for k in ("kind", "note", "runbook", "repeat", "generated") if k in arguments}
+            unknown = sorted(set(arguments) - set(allowed))
+            if unknown:
+                raise ValueError(f"unsupported argument(s) {unknown}")
+            result = zendesk_client.set_ticket_triage_notes(int(ticket_id), **allowed)
+            return [types.TextContent(type="text", text=json.dumps({"message": "Triage notes stored (not sent)", "result": result}, indent=2))]
 
         elif name == "list_help_center_sections":
             result = zendesk_client.list_help_center_sections()

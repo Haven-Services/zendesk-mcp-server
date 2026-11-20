@@ -172,6 +172,20 @@ whose comment is `{{ticket.ticket_field_<id> | newline_to_br}}` puts the draft i
   - `ticket_id` (integer)
   - `draft` (string): plain text, at most 8000 characters; an empty string clears the draft
 
+### set_ticket_triage_notes
+
+Store triage notes on a ticket for agents. Writes only the agent-only multi-line ticket field titled
+`AI triage notes`, as one JSON object with the keys `kind`, `runbook`, `repeat`, `generated` and `note`. It adds
+no comment and leaves status and assignee alone.
+
+- Input:
+  - `ticket_id` (integer)
+  - `kind` (string): one of `request`, `incident`, `security`, `vendor`, `noise`
+  - `note` (string): plain text, at most 4000 characters
+  - `runbook` (string, optional): at most 200 characters
+  - `repeat` (integer, optional): similar tickets in the past month
+  - `generated` (string, optional): `YYYY-MM-DD`
+
 ### Help Center article drafts
 
 Read the Help Center and stage articles for review. The server creates and edits **drafts only**: a draft is not

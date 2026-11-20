@@ -81,6 +81,12 @@ _OPTION_REQUIRED_FIELD_TYPES = frozenset({'tagger', 'multiselect'})
 _DRAFT_REPLY_FIELD_TITLE = 'AI draft reply'
 _DRAFT_REPLY_MAX_CHARS = 8000
 
+# The agent-only multi-line ticket field that holds triage notes as one JSON object.
+_TRIAGE_NOTES_FIELD_TITLE = 'AI triage notes'
+_TRIAGE_KINDS = frozenset({'request', 'incident', 'security', 'vendor', 'noise'})
+_TRIAGE_NOTE_MAX_CHARS = 4000
+_TRIAGE_RUNBOOK_MAX_CHARS = 200
+
 # Zendesk Search API hard cap. page * per_page > 1000 returns HTTP 422.
 _SEARCH_RESULT_CAP = 1000
 
@@ -274,6 +280,35 @@ def _build_draft_reply_payload(field_id: int, draft: Any) -> Dict[str, Any]:
     if len(draft) > _DRAFT_REPLY_MAX_CHARS:
         raise ValueError(f"draft is {len(draft)} characters; the limit is {_DRAFT_REPLY_MAX_CHARS}")
     return {'ticket': {'custom_fields': [{'id': int(field_id), 'value': draft}]}}
+
+
+def _build_triage_notes_value(
+    kind: Any, note: Any, runbook: Any = None, repeat: Any = None, generated: Any = None,
+) -> str:
+    """Build the JSON text stored in the triage-notes field. Only these five keys
+    exist; every value is validated, so the field never carries free-form structure."""
+    if kind not in _TRIAGE_KINDS:
+        raise ValueError(f"kind must be one of {sorted(_TRIAGE_KINDS)}")
+    if not isinstance(note, str) or not note.strip():
+        raise ValueError("note is required and must be a non-empty string")
+    if len(note) > _TRIAGE_NOTE_MAX_CHARS:
+        raise ValueError(f"note is {len(note)} characters; the limit is {_TRIAGE_NOTE_MAX_CHARS}")
+    data: Dict[str, Any] = {'kind': kind}
+    if runbook is not None:
+        if not isinstance(runbook, str) or len(runbook) > _TRIAGE_RUNBOOK_MAX_CHARS:
+            raise ValueError(f"runbook must be a string of at most {_TRIAGE_RUNBOOK_MAX_CHARS} characters")
+        if runbook.strip():
+            data['runbook'] = runbook.strip()
+    if repeat is not None:
+        if isinstance(repeat, bool) or not isinstance(repeat, int) or repeat < 0:
+            raise ValueError("repeat must be a non-negative integer")
+        data['repeat'] = repeat
+    if generated is not None:
+        if not isinstance(generated, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', generated):
+            raise ValueError("generated must be a date, YYYY-MM-DD")
+        data['generated'] = generated
+    data['note'] = note.strip()
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _zql_format_value(v: Any) -> str:
@@ -1032,13 +1067,11 @@ class ZendeskClient:
         )
         return _project(data.get('trigger', {}), _TRIGGER_FIELDS)
 
-    def set_ticket_draft_reply(
-        self, ticket_id: int, draft: str, field_title: str = _DRAFT_REPLY_FIELD_TITLE,
+    def _set_single_textarea_field(
+        self, ticket_id: int, field_title: str, value: str, *, error_context: str,
     ) -> Dict[str, Any]:
-        """Store a reply draft on a ticket for an agent to review, via
-        PUT /api/v2/tickets/{id}.json with the draft-reply custom field only.
-        Adds no comment and sends nothing to the requester; an agent inserts the
-        draft into the reply box with a macro and submits it."""
+        """Write one textarea custom field, found by its title, and nothing else:
+        PUT /api/v2/tickets/{id}.json with a one-entry custom_fields list."""
         fields: List[Dict[str, Any]] = []
         page = 1
         while True:
@@ -1051,18 +1084,38 @@ class ZendeskClient:
                 break
             page += 1
         field_id = _find_draft_reply_field(fields, field_title)
-        payload = _build_draft_reply_payload(field_id, draft)
+        payload = _build_draft_reply_payload(field_id, value)
         data = self._send_json(
-            'PUT', f'tickets/{int(ticket_id)}.json', payload,
-            error_context=f'set draft reply on ticket {ticket_id}',
+            'PUT', f'tickets/{int(ticket_id)}.json', payload, error_context=error_context,
         )
         ticket = data.get('ticket', {})
-        return {
-            'ticket_id': ticket.get('id'),
-            'status': ticket.get('status'),
-            'field_id': field_id,
-            'draft_chars': len(draft),
-        }
+        return {'ticket_id': ticket.get('id'), 'status': ticket.get('status'), 'field_id': field_id}
+
+    def set_ticket_draft_reply(
+        self, ticket_id: int, draft: str, field_title: str = _DRAFT_REPLY_FIELD_TITLE,
+    ) -> Dict[str, Any]:
+        """Store a reply draft on a ticket for an agent to review, via
+        PUT /api/v2/tickets/{id}.json with the draft-reply custom field only.
+        Adds no comment and sends nothing to the requester; an agent inserts the
+        draft into the reply box and submits it."""
+        result = self._set_single_textarea_field(
+            ticket_id, field_title, draft, error_context=f'set draft reply on ticket {ticket_id}',
+        )
+        result['draft_chars'] = len(draft)
+        return result
+
+    def set_ticket_triage_notes(
+        self, ticket_id: int, kind: str, note: str, runbook: Any = None, repeat: Any = None,
+        generated: Any = None, field_title: str = _TRIAGE_NOTES_FIELD_TITLE,
+    ) -> Dict[str, Any]:
+        """Store triage notes on a ticket as one JSON object in the triage-notes
+        custom field only. Adds no comment; status and assignee are untouched."""
+        value = _build_triage_notes_value(kind, note, runbook, repeat, generated)
+        result = self._set_single_textarea_field(
+            ticket_id, field_title, value, error_context=f'set triage notes on ticket {ticket_id}',
+        )
+        result['notes_chars'] = len(value)
+        return result
 
     # --- Help Center (Guide) ---------------------------------------------------
 
