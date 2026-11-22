@@ -441,6 +441,31 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="list_custom_statuses",
+            description=(
+                "List custom ticket statuses. Use to resolve a ticket's "
+                "custom_status_id to its label. Returns id, status_category "
+                "(new/open/pending/hold/solved), agent_label, end_user_label, "
+                "description, active, default. Optional filters: "
+                "status_categories (list), active (bool)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "status_categories": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["new", "open", "pending", "hold", "solved"]},
+                        "description": "Only statuses in these categories"
+                    },
+                    "active": {
+                        "type": "boolean",
+                        "description": "Only active (true) or inactive (false) statuses"
+                    }
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
             name="list_ticket_fields",
             description=(
                 "List ticket fields, including custom_field_options (id/name/value) "
@@ -999,6 +1024,17 @@ async def handle_call_tool(
             result = zendesk_client.list_brands(
                 page=(arguments or {}).get("page", 1),
                 per_page=(arguments or {}).get("per_page", 100),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )]
+
+        elif name == "list_custom_statuses":
+            args = arguments or {}
+            result = zendesk_client.list_custom_statuses(
+                status_categories=args.get("status_categories"),
+                active=args.get("active"),
             )
             return [types.TextContent(
                 type="text",
