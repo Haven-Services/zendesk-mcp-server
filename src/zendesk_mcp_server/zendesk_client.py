@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 import json
 import re
 import urllib.request
@@ -16,7 +16,7 @@ from zenpy.lib.api_objects import Ticket as ZenpyTicket
 # Field projections — single source of truth so the same record type returns the
 # same keys whether it's surfaced as a primary result or as a sideload.
 _TICKET_SUMMARY_FIELDS: Tuple[str, ...] = (
-    'id', 'subject', 'status', 'priority', 'type',
+    'id', 'subject', 'status', 'custom_status_id', 'priority', 'type',
     'created_at', 'updated_at',
     'requester_id', 'assignee_id', 'tags',
 )
@@ -40,6 +40,11 @@ _TICKET_FORM_FIELDS: Tuple[str, ...] = (
     'id', 'name', 'display_name', 'active', 'default', 'end_user_visible',
     'ticket_field_ids', 'end_user_conditions', 'agent_conditions',
 )
+_CUSTOM_STATUS_FIELDS: Tuple[str, ...] = (
+    'id', 'status_category', 'agent_label', 'end_user_label', 'description',
+    'active', 'default',
+)
+_CUSTOM_STATUS_CATEGORIES: Tuple[str, ...] = ('new', 'open', 'pending', 'hold', 'solved')
 _TICKET_FIELD_FIELDS: Tuple[str, ...] = (
     'id', 'type', 'title', 'active', 'custom_field_options',
 )
@@ -549,6 +554,7 @@ class ZendeskClient:
                 'subject': ticket.subject,
                 'description': ticket.description,
                 'status': ticket.status,
+                'custom_status_id': getattr(ticket, 'custom_status_id', None),
                 'priority': ticket.priority,
                 'created_at': str(ticket.created_at),
                 'updated_at': str(ticket.updated_at),
@@ -933,6 +939,31 @@ class ZendeskClient:
         data = self._get_json('ticket_forms.json', {}, error_context='list ticket forms')
         forms = [_project(f, _TICKET_FORM_FIELDS) for f in data.get('ticket_forms', [])]
         return {'count': len(forms), 'ticket_forms': forms}
+
+    def list_custom_statuses(
+        self,
+        status_categories: Optional[List[str]] = None,
+        active: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        List custom ticket statuses via /api/v2/custom_statuses.json. Use to
+        resolve a ticket's custom_status_id to its label and status category.
+        The endpoint is not paginated. Optional filters: status_categories
+        (any of new, open, pending, hold, solved) and active.
+        """
+        params: Dict[str, str] = {}
+        if status_categories:
+            bad = [s for s in status_categories if s not in _CUSTOM_STATUS_CATEGORIES]
+            if bad:
+                raise ValueError(
+                    f"unknown status_categories {bad}; use any of {list(_CUSTOM_STATUS_CATEGORIES)}"
+                )
+            params['status_categories'] = ' '.join(status_categories)
+        if active is not None:
+            params['active'] = 'true' if active else 'false'
+        data = self._get_json('custom_statuses.json', params, error_context='list custom statuses')
+        statuses = [_project(s, _CUSTOM_STATUS_FIELDS) for s in data.get('custom_statuses', [])]
+        return {'count': len(statuses), 'custom_statuses': statuses}
 
     def create_ticket_form(self, **fields: Any) -> Dict[str, Any]:
         """Create a ticket form via POST /api/v2/ticket_forms.json.
