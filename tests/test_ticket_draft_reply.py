@@ -13,8 +13,14 @@ from zendesk_mcp_server.zendesk_client import (
 )
 
 _FIELDS = [
-    {"id": 1, "title": "AI draft reply", "type": "textarea", "active": True},
-    {"id": 2, "title": "AI Agent Notes", "type": "textarea", "active": True},
+    {
+        "id": 1, "title": "AI draft reply", "type": "textarea", "active": True,
+        "visible_in_portal": False, "editable_in_portal": False,
+    },
+    {
+        "id": 2, "title": "AI Agent Notes", "type": "textarea", "active": True,
+        "visible_in_portal": False, "editable_in_portal": False,
+    },
 ]
 
 
@@ -24,9 +30,11 @@ class TestFindDraftReplyField:
 
     @pytest.mark.parametrize("fields", [
         [],
-        [{"id": 1, "title": "AI draft reply", "type": "textarea", "active": False}],
-        [{"id": 1, "title": "AI draft reply", "type": "text", "active": True}],
-        _FIELDS + [{"id": 3, "title": "AI draft reply", "type": "textarea", "active": True}],
+        [{**_FIELDS[0], "active": False}],
+        [{**_FIELDS[0], "type": "text"}],
+        [{**_FIELDS[0], "visible_in_portal": True}],
+        [{**_FIELDS[0], "editable_in_portal": True}],
+        [_FIELDS[0], {**_FIELDS[0], "id": 3}],
     ])
     def test_missing_or_ambiguous_field_raises(self, fields):
         with pytest.raises(ValueError, match="expected exactly one"):
@@ -97,7 +105,10 @@ class TestBuildTriageNotesValue:
 
 def test_set_ticket_triage_notes_writes_only_the_notes_field(monkeypatch):
     calls = []
-    fields = _FIELDS + [{"id": 9, "title": "AI triage notes", "type": "textarea", "active": True}]
+    fields = _FIELDS + [{
+        "id": 9, "title": "AI triage notes", "type": "textarea", "active": True,
+        "visible_in_portal": False, "editable_in_portal": False,
+    }]
 
     @contextmanager
     def fake_urlopen(req, timeout=None):
