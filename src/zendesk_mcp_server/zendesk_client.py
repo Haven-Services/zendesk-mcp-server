@@ -278,16 +278,23 @@ def _build_article_translation_payload(fields: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _find_draft_reply_field(ticket_fields: List[Dict[str, Any]], title: str) -> int:
-    """Return the id of the one active textarea ticket field titled `title`.
-    Raises when it is missing or ambiguous, so a draft is never written to a
-    field picked by guesswork."""
+    """Return the id of the one active, agent-only textarea titled `title`.
+    Raises when it is missing or ambiguous, so internal text is never written
+    to a field picked by guesswork or exposed in the customer portal."""
     matches = [
         f for f in ticket_fields
-        if f.get('title') == title and f.get('type') == 'textarea' and f.get('active')
+        if (
+            f.get('title') == title
+            and f.get('type') == 'textarea'
+            and f.get('active')
+            and f.get('visible_in_portal') is False
+            and f.get('editable_in_portal') is False
+        )
     ]
     if len(matches) != 1:
         raise ValueError(
-            f"expected exactly one active textarea ticket field titled {title!r}, found {len(matches)}"
+            f"expected exactly one active agent-only textarea ticket field "
+            f"titled {title!r}, found {len(matches)}"
         )
     return int(matches[0]['id'])
 
